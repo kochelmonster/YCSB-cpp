@@ -5,6 +5,15 @@ cmake_minimum_required(VERSION 3.10)
 project(ycsb-cpp LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 
+# Enable verbose compilation output
+set(CMAKE_VERBOSE_MAKEFILE OFF)
+
+# Set general optimization level to -O3 for GCC
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -Wall -Wextra -Wpedantic")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -Wall -Wextra -Wpedantic")
+endif()
+
 set(CMAKE_BUILD_TYPE Release)
 set(CompilerFlags
         CMAKE_CXX_FLAGS
@@ -25,6 +34,7 @@ option(BIND_ROCKSDB "build with rocksdb" OFF)
 option(BIND_LMDB "build with lmdb" OFF)
 option(BIND_LEVELDB "build with leveldb" OFF)
 option(BIND_WIREDTIGER "build with wiredtiger" OFF)
+option(BIND_LEAVES "build with leaves" OFF)
 
 option(WITH_ZLIB "linking YCSB with zlib; needed by HdrHISTOGRAM, DO NOT TURN OFF" ON)
 option(WITH_LZ4 "linking YCSB with lz4" OFF)
@@ -118,6 +128,29 @@ if (BIND_WIREDTIGER)
     target_include_directories(ycsb PRIVATE ${WIREDTIGER_INCLUDE_DIR})
 else()
     message(STATUS "BIND_WIREDTIGER - OFF")
+endif()
+
+if (BIND_LEAVES)
+    message(STATUS "BIND_LEAVES - ON")
+    file(GLOB_RECURSE YCSB_LEAVES_SRC "leaves/*.cc")
+    target_sources(ycsb PRIVATE ${YCSB_LEAVES_SRC})
+    
+    # Leaves is header-only, so we just need to add include directory
+    target_include_directories(ycsb PRIVATE /home/michael/src/leaves/include)
+    
+    # Add specific compiler optimizations for Leaves files with GCC
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        foreach(LEAVES_FILE ${YCSB_LEAVES_SRC})
+            set_source_files_properties(${LEAVES_FILE} PROPERTIES
+                COMPILE_FLAGS "-DNDEBUG -g -march=native -O3 -funroll-loops -flto=auto"
+            )
+        endforeach()
+        message(STATUS "Applied GCC optimizations to Leaves files: -DNDEBUG -g -march=native -O3 -funroll-loops -flto=auto")
+    endif()
+    
+    message(STATUS "Found Leaves library (header-only)")
+else()
+    message(STATUS "BIND_LEAVES - OFF")
 endif()
 
 if(WITH_ZLIB)
