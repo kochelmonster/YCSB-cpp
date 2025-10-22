@@ -8,3 +8,7 @@ tags
 compile_commands.json
 .clangd/
 .cache/
+benchmark_graphs
+benchmark_results
+build/
+CMakeUserPresets.json
