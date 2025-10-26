@@ -34,24 +34,26 @@ run_benchmark() {
     local output_file="$RESULTS_DIR/${db}_${workload}_${phase}_${TIMESTAMP}.log"
     local properties_file="${db}/${db}.properties"
     
-    # Clean up previous database files
-    case $db in
-        "rocksdb")
-            rm -rf /tmp/ycsb-rocksdb
-            ;;
-        "leveldb") 
-            rm -rf /tmp/ycsb-leveldb
-            ;;
-        "lmdb")
-            rm -rf /tmp/ycsb-lmdb
-            ;;
-        "wiredtiger")
-            rm -rf /tmp/ycsb-wiredtiger
-            ;;
-        "leaves")
-            rm -rf /tmp/ycsb-leaves
-            ;;
-    esac
+    # Clean up previous database files ONLY before load phase
+    if [ "$phase" = "load" ]; then
+        case $db in
+            "rocksdb")
+                rm -rf /tmp/ycsb-rocksdb
+                ;;
+            "leveldb") 
+                rm -rf /tmp/ycsb-leveldb
+                ;;
+            "lmdb")
+                rm -rf /tmp/ycsb-lmdb
+                ;;
+            "wiredtiger")
+                rm -rf /tmp/ycsb-wiredtiger
+                ;;
+            "leaves")
+                rm -rf /tmp/ycsb-leaves
+                ;;
+        esac
+    fi
     
     # Run the benchmark
     if [ "$phase" = "load" ]; then

@@ -14,6 +14,7 @@
 
 #include "core/db.h"
 #include "utils/properties.h"
+#include "utils/serialization.h"
 
 #include <leveldb/db.h>
 #include <leveldb/options.h>
@@ -61,6 +62,8 @@ class LeveldbDB : public DB {
     kColumnMajor
   };
   LdbFormat format_;
+
+  utils::Serialization serializer_;
 
   void GetOptions(const utils::Properties &props, leveldb::Options *opt);
   void SerializeRow(const std::vector<Field> &values, std::string *data);

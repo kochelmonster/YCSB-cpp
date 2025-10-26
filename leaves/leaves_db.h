@@ -14,6 +14,7 @@
 
 #include "core/db.h"
 #include "utils/properties.h"
+#include "utils/serialization.h"
 
 // Include Leaves database headers
 #include <leaves/leaves.hpp>
@@ -47,14 +48,7 @@ class LeavesDB : public DB {
   };
   LeavesFormat format_;
 
-  // Serialization/Deserialization helpers
-  static void SerializeRow(const std::vector<Field> &values, std::string &data);
-  static void DeserializeRowFilter(std::vector<Field> &values, const char *p, const char *lim,
-                                   const std::vector<std::string> &fields);
-  static void DeserializeRowFilter(std::vector<Field> &values, const std::string &data,
-                                   const std::vector<std::string> &fields);
-  static void DeserializeRow(std::vector<Field> &values, const char *p, const char *lim);
-  static void DeserializeRow(std::vector<Field> &values, const std::string &data);
+  utils::Serialization serializer_;
 
   // Database instance management
   static std::unique_ptr<leaves::MapStorage> storage_;

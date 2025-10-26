@@ -8,13 +8,17 @@ set(CMAKE_CXX_STANDARD 17)
 # Enable verbose compilation output
 set(CMAKE_VERBOSE_MAKEFILE OFF)
 
-# Set general optimization level to -O3 for GCC
+# Set general optimization level to -O3 for GCC only in Release mode
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -Wall -Wextra -Wpedantic")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -Wall -Wextra -Wpedantic")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -g")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic -g")
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
+    endif()
 endif()
 
-set(CMAKE_BUILD_TYPE Release)
+# set(CMAKE_BUILD_TYPE Release)
 set(CompilerFlags
         CMAKE_CXX_FLAGS
         CMAKE_CXX_FLAGS_DEBUG
@@ -137,9 +141,9 @@ if (BIND_LEAVES)
     
     # Leaves is header-only, so we just need to add include directory
     target_include_directories(ycsb PRIVATE /home/michael/src/leaves/include)
-    
-    # Add specific compiler optimizations for Leaves files with GCC
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+
+    # Add specific compiler optimizations for Leaves files with GCC only in Release mode
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_BUILD_TYPE STREQUAL "Release")
         foreach(LEAVES_FILE ${YCSB_LEAVES_SRC})
             set_source_files_properties(${LEAVES_FILE} PROPERTIES
                 COMPILE_FLAGS "-DNDEBUG -g -march=native -O3 -funroll-loops -flto=auto"

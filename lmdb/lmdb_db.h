@@ -12,6 +12,7 @@
 #include <mutex>
 
 #include "core/db.h"
+#include "utils/serialization.h"
 
 #include <lmdb.h>
 
@@ -39,10 +40,7 @@ class LmdbDB : public DB {
   Status Delete(const std::string &table, const std::string &key);
 
  private:
-  void SerializeRow(const std::vector<Field> &values, std::string *data);
-  void DeserializeRowFilter(std::vector<Field> *values, const char *data_ptr, size_t data_len,
-                            const std::vector<std::string> &fields);
-  void DeserializeRow(std::vector<Field> *values, const char *data_ptr, size_t data_len);
+  utils::Serialization serializer_;
 
   static size_t field_count_;
   static std::string field_prefix_;

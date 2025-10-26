@@ -109,6 +109,20 @@ void CoreWorkload::Init(const utils::Properties &p) {
   field_prefix_ = p.GetProperty(FIELD_NAME_PREFIX, FIELD_NAME_PREFIX_DEFAULT);
   field_len_generator_ = GetFieldLenGenerator(p);
 
+  // Reserve buffers to avoid reallocations in hot path
+  // Key buffer: typical key format is "user" + padded number, reserve for max size
+  key_buffer_.reserve(64);
+  
+  // Result and values buffers: reserve for field_count_ fields
+  result_buffer_.reserve(field_count_);
+  values_buffer_.reserve(field_count_);
+  
+  // Fields buffer: used when reading/filtering specific fields (typically 1-2 fields)
+  fields_buffer_.reserve(field_count_);
+  
+  // Scan result buffer: reserve for typical scan length (defaults to 1-1000, reserve for moderate size)
+  scan_result_buffer_.reserve(100);
+
   double read_proportion = std::stod(p.GetProperty(READ_PROPORTION_PROPERTY,
                                                    READ_PROPORTION_DEFAULT));
   double update_proportion = std::stod(p.GetProperty(UPDATE_PROPORTION_PROPERTY,
@@ -257,10 +271,10 @@ std::string CoreWorkload::NextFieldName() {
 }
 
 bool CoreWorkload::DoInsert(DB &db) {
-  const std::string key = BuildKeyName(insert_key_sequence_->Next());
-  std::vector<DB::Field> fields;
-  BuildValues(fields);
-  return db.Insert(table_name_, key, fields) == DB::kOK;
+  key_buffer_ = BuildKeyName(insert_key_sequence_->Next());
+  values_buffer_.clear();
+  BuildValues(values_buffer_);
+  return db.Insert(table_name_, key_buffer_, values_buffer_) == DB::kOK;
 }
 
 bool CoreWorkload::DoTransaction(DB &db) {
@@ -289,71 +303,71 @@ bool CoreWorkload::DoTransaction(DB &db) {
 
 DB::Status CoreWorkload::TransactionRead(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  const std::string key = BuildKeyName(key_num);
-  std::vector<DB::Field> result;
+  key_buffer_ = BuildKeyName(key_num);
+  result_buffer_.clear();
   if (!read_all_fields()) {
-    std::vector<std::string> fields;
-    fields.push_back(NextFieldName());
-    return db.Read(table_name_, key, &fields, result);
+    fields_buffer_.clear();
+    fields_buffer_.push_back(NextFieldName());
+    return db.Read(table_name_, key_buffer_, &fields_buffer_, result_buffer_);
   } else {
-    return db.Read(table_name_, key, NULL, result);
+    return db.Read(table_name_, key_buffer_, NULL, result_buffer_);
   }
 }
 
 DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  const std::string key = BuildKeyName(key_num);
-  std::vector<DB::Field> result;
+  key_buffer_ = BuildKeyName(key_num);
+  result_buffer_.clear();
 
   if (!read_all_fields()) {
-    std::vector<std::string> fields;
-    fields.push_back(NextFieldName());
-    db.Read(table_name_, key, &fields, result);
+    fields_buffer_.clear();
+    fields_buffer_.push_back(NextFieldName());
+    db.Read(table_name_, key_buffer_, &fields_buffer_, result_buffer_);
   } else {
-    db.Read(table_name_, key, NULL, result);
+    db.Read(table_name_, key_buffer_, NULL, result_buffer_);
   }
 
-  std::vector<DB::Field> values;
+  values_buffer_.clear();
   if (write_all_fields()) {
-    BuildValues(values);
+    BuildValues(values_buffer_);
   } else {
-    BuildSingleValue(values);
+    BuildSingleValue(values_buffer_);
   }
-  return db.Update(table_name_, key, values);
+  return db.Update(table_name_, key_buffer_, values_buffer_);
 }
 
 DB::Status CoreWorkload::TransactionScan(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  const std::string key = BuildKeyName(key_num);
+  key_buffer_ = BuildKeyName(key_num);
   int len = scan_len_chooser_->Next();
-  std::vector<std::vector<DB::Field>> result;
+  scan_result_buffer_.clear();
   if (!read_all_fields()) {
-    std::vector<std::string> fields;
-    fields.push_back(NextFieldName());
-    return db.Scan(table_name_, key, len, &fields, result);
+    fields_buffer_.clear();
+    fields_buffer_.push_back(NextFieldName());
+    return db.Scan(table_name_, key_buffer_, len, &fields_buffer_, scan_result_buffer_);
   } else {
-    return db.Scan(table_name_, key, len, NULL, result);
+    return db.Scan(table_name_, key_buffer_, len, NULL, scan_result_buffer_);
   }
 }
 
 DB::Status CoreWorkload::TransactionUpdate(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  const std::string key = BuildKeyName(key_num);
-  std::vector<DB::Field> values;
+  key_buffer_ = BuildKeyName(key_num);
+  values_buffer_.clear();
   if (write_all_fields()) {
-    BuildValues(values);
+    BuildValues(values_buffer_);
   } else {
-    BuildSingleValue(values);
+    BuildSingleValue(values_buffer_);
   }
-  return db.Update(table_name_, key, values);
+  return db.Update(table_name_, key_buffer_, values_buffer_);
 }
 
 DB::Status CoreWorkload::TransactionInsert(DB &db) {
   uint64_t key_num = transaction_insert_key_sequence_->Next();
-  const std::string key = BuildKeyName(key_num);
-  std::vector<DB::Field> values;
-  BuildValues(values);
-  DB::Status s = db.Insert(table_name_, key, values);
+  key_buffer_ = BuildKeyName(key_num);
+  values_buffer_.clear();
+  BuildValues(values_buffer_);
+  DB::Status s = db.Insert(table_name_, key_buffer_, values_buffer_);
   transaction_insert_key_sequence_->Acknowledge(key_num);
   return s;
 }
