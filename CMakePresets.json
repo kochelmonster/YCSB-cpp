@@ -1,0 +1,116 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 10,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default Config",
+      "description": "Default build configuration",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "all-bind-on",
+      "displayName": "All Databases Enabled",
+      "description": "Build with all database bindings enabled (RocksDB, LMDB, LevelDB, WiredTiger, Leaves)",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BIND_ROCKSDB": "ON",
+        "BIND_LMDB": "ON",
+        "BIND_LEVELDB": "ON",
+        "BIND_WIREDTIGER": "ON",
+        "BIND_LEAVES": "ON",
+        "WITH_ZLIB": "ON",
+        "WITH_LZ4": "ON",
+        "WITH_SNAPPY": "ON",
+        "WITH_ZSTD": "ON",
+        "WITH_BZ2": "ON"
+      }
+    },
+    {
+      "name": "rocksdb-only",
+      "displayName": "RocksDB Only",
+      "description": "Build with only RocksDB binding",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BIND_ROCKSDB": "ON",
+        "BIND_LMDB": "ON",
+        "BIND_LEVELDB": "ON",
+        "BIND_WIREDTIGER": "ON",
+        "BIND_LEAVES": "ON"
+      }
+    },
+    {
+      "name": "leaves-only",
+      "displayName": "Leaves Only",
+      "description": "Build with only Leaves binding",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BIND_ROCKSDB": "OFF",
+        "BIND_LMDB": "OFF",
+        "BIND_LEVELDB": "OFF",
+        "BIND_WIREDTIGER": "OFF",
+        "BIND_LEAVES": "ON"
+      }
+    },
+    {
+      "name": "debug-all",
+      "displayName": "Debug - All Databases",
+      "description": "Debug build with all database bindings enabled",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BIND_ROCKSDB": "ON",
+        "BIND_LMDB": "ON",
+        "BIND_LEVELDB": "ON",
+        "BIND_WIREDTIGER": "ON",
+        "BIND_LEAVES": "ON",
+        "WITH_ZLIB": "ON",
+        "WITH_LZ4": "ON",
+        "WITH_SNAPPY": "ON",
+        "WITH_ZSTD": "ON",
+        "WITH_BZ2": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "all-bind-on",
+      "configurePreset": "all-bind-on",
+      "displayName": "Build All Databases",
+      "description": "Build with all databases enabled"
+    },
+    {
+      "name": "rocksdb-only",
+      "configurePreset": "rocksdb-only",
+      "displayName": "Build RocksDB Only",
+      "description": "Build with only RocksDB"
+    },
+    {
+      "name": "leaves-only",
+      "configurePreset": "leaves-only",
+      "displayName": "Build Leaves Only",
+      "description": "Build with only Leaves"
+    },
+    {
+      "name": "debug-all",
+      "configurePreset": "debug-all",
+      "displayName": "Debug Build - All",
+      "description": "Debug build with all databases"
+    }
+  ]
+}

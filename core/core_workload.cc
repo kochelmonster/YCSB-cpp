@@ -122,6 +122,12 @@ void CoreWorkload::Init(const utils::Properties &p) {
   
   // Scan result buffer: reserve for typical scan length (defaults to 1-1000, reserve for moderate size)
   scan_result_buffer_.reserve(100);
+  
+  // Pre-build field names to avoid string construction in hot path
+  field_names_.reserve(field_count_);
+  for (int i = 0; i < field_count_; ++i) {
+    field_names_.push_back(field_prefix_ + std::to_string(i));
+  }
 
   double read_proportion = std::stod(p.GetProperty(READ_PROPORTION_PROPERTY,
                                                    READ_PROPORTION_DEFAULT));
@@ -230,32 +236,43 @@ std::string CoreWorkload::BuildKeyName(uint64_t key_num) {
   if (!ordered_inserts_) {
     key_num = utils::Hash(key_num);
   }
-  std::string prekey = "user";
-  std::string value = std::to_string(key_num);
-  int fill = std::max(0, zero_padding_ - static_cast<int>(value.size()));
-  return prekey.append(fill, '0').append(value);
+  
+  // Build key directly in key_buffer_ to avoid temporary string allocations
+  key_buffer_.clear();
+  key_buffer_.append("user");
+  
+  // Convert key_num to string and calculate padding
+  char num_buf[32];
+  int num_len = snprintf(num_buf, sizeof(num_buf), "%lu", key_num);
+  
+  int fill = std::max(0, zero_padding_ - num_len);
+  key_buffer_.append(fill, '0');
+  key_buffer_.append(num_buf, num_len);
+  
+  return key_buffer_;
 }
 
 void CoreWorkload::BuildValues(std::vector<ycsbc::DB::Field> &values) {
   for (int i = 0; i < field_count_; ++i) {
     values.push_back(DB::Field());
     ycsbc::DB::Field &field = values.back();
-    field.name.append(field_prefix_).append(std::to_string(i));
+    // Use pre-built field name instead of constructing each time
+    field.name = field_names_[i];
     uint64_t len = field_len_generator_->Next();
     field.value.reserve(len);
-    RandomByteGenerator byte_generator;
-    std::generate_n(std::back_inserter(field.value), len, [&]() { return byte_generator.Next(); } );
+    // Use class member byte_generator_ instead of creating new instance
+    std::generate_n(std::back_inserter(field.value), len, [this]() { return byte_generator_.Next(); } );
   }
 }
 
 void CoreWorkload::BuildSingleValue(std::vector<ycsbc::DB::Field> &values) {
   values.push_back(DB::Field());
   ycsbc::DB::Field &field = values.back();
-  field.name.append(NextFieldName());
+  field.name = NextFieldName();
   uint64_t len = field_len_generator_->Next();
   field.value.reserve(len);
-  RandomByteGenerator byte_generator;
-  std::generate_n(std::back_inserter(field.value), len, [&]() { return byte_generator.Next(); } );
+  // Use class member byte_generator_ instead of creating new instance
+  std::generate_n(std::back_inserter(field.value), len, [this]() { return byte_generator_.Next(); } );
 }
 
 uint64_t CoreWorkload::NextTransactionKeyNum() {
@@ -266,8 +283,9 @@ uint64_t CoreWorkload::NextTransactionKeyNum() {
   return key_num;
 }
 
-std::string CoreWorkload::NextFieldName() {
-  return std::string(field_prefix_).append(std::to_string(field_chooser_->Next()));
+const std::string& CoreWorkload::NextFieldName() {
+  // Return pre-built field name by const reference to avoid copy
+  return field_names_[field_chooser_->Next()];
 }
 
 bool CoreWorkload::DoInsert(DB &db) {
