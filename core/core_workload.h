@@ -226,6 +226,13 @@ class CoreWorkload {
   bool ordered_inserts_;
   size_t record_count_;
   int zero_padding_;
+  
+  // Reusable buffers to avoid allocations in hot path
+  std::string key_buffer_;
+  std::vector<DB::Field> result_buffer_;
+  std::vector<DB::Field> values_buffer_;
+  std::vector<std::string> fields_buffer_;
+  std::vector<std::vector<DB::Field>> scan_result_buffer_;
 };
 
 } // ycsbc

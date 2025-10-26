@@ -18,6 +18,7 @@
 #include "core/db_factory.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
+#include "utils/serialization.h"
 
 #include <lmdb.h>
 
@@ -69,7 +70,7 @@ void LmdbDB::Init() {
                                     CoreWorkload::FIELD_NAME_PREFIX_DEFAULT);
 
   int ret;
-  int env_opt = 0;
+  int env_opt = MDB_NOTLS;  // Enable lock-free reads across threads
   if (props.GetProperty(PROP_NOSYNC, PROP_NOSYNC_DEFAULT) == "true") {
     env_opt |= MDB_NOSYNC;
   }
@@ -133,57 +134,7 @@ void LmdbDB::Cleanup() {
   mdb_env_close(env_);
 }
 
-void LmdbDB::SerializeRow(const std::vector<Field> &values, std::string *data) {
-  for (const Field &field : values) {
-    uint32_t len = field.name.size();
-    data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t));
-    data->append(field.name.data(), field.name.size());
-    len = field.value.size();
-    data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t));
-    data->append(field.value.data(), field.value.size());
-  }
-}
-
-void LmdbDB::DeserializeRowFilter(std::vector<Field> *values, const char *data_ptr, size_t data_len,
-                                  const std::vector<std::string> &fields) {
-  const char *p = data_ptr;
-  const char *lim = p + data_len;
-  std::vector<std::string>::const_iterator filter_iter = fields.begin();
-  while (p != lim && filter_iter != fields.end()) {
-    assert(p < lim);
-    uint32_t len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    std::string field(p, static_cast<const size_t>(len));
-    p += len;
-    len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    std::string value(p, static_cast<const size_t>(len));
-    p += len;
-    if (*filter_iter == field) {
-      values->push_back({field, value});
-      filter_iter++;
-    }
-  }
-  assert(values->size() == fields.size());
-}
-
-void LmdbDB::DeserializeRow(std::vector<Field> *values, const char *data_ptr, size_t data_len) {
-  const char *p = data_ptr;
-  const char *lim = p + data_len;
-  while (p != lim) {
-    assert(p < lim);
-    uint32_t len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    std::string field(p, static_cast<const size_t>(len));
-    p += len;
-    len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    std::string value(p, static_cast<const size_t>(len));
-    p += len;
-    values->push_back({field, value});
-  }
-  assert(values->size() == field_count_);
-}
+// Serialization methods now use utils::Serialization
 
 DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const std::vector<std::string> *fields,
                         std::vector<Field> &result) {
@@ -195,6 +146,7 @@ DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const 
   key_slice.mv_size = key.size();
 
   int ret;
+  // Use MDB_RDONLY | MDB_NOTLS for fast lock-free reads
   ret = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
   if (ret) {
     throw utils::Exception(std::string("Read mdb_txn_begin: ") + mdb_strerror(ret));
@@ -202,16 +154,20 @@ DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const 
   ret = mdb_get(txn, dbi_, &key_slice, &val_slice);
   if (ret == MDB_NOTFOUND) {
     s = kNotFound;
-    goto cleanup;
+    mdb_txn_abort(txn);
+    return s;
   } else if (ret) {
+    mdb_txn_abort(txn);
     throw utils::Exception(std::string("Read mdb_get: ") + mdb_strerror(ret));
   }
   if (fields != nullptr) {
-    DeserializeRowFilter(&result, static_cast<char *>(val_slice.mv_data), val_slice.mv_size, *fields);
+    serializer_.DeserializeRowFilter(result, static_cast<char *>(val_slice.mv_data), 
+                                     val_slice.mv_size, *fields);
   } else {
-    DeserializeRow(&result, static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+    serializer_.DeserializeRow(result, static_cast<char *>(val_slice.mv_data), 
+                              val_slice.mv_size, field_count_);
   }
-cleanup:
+  // Abort instead of commit for read-only transactions (faster)
   mdb_txn_abort(txn);
   return s;
 }
@@ -246,9 +202,11 @@ DB::Status LmdbDB::Scan(const std::string &table, const std::string &key, int le
     result.push_back(std::vector<Field>());
     std::vector<Field> &values = result.back();
     if (fields != nullptr) {
-      DeserializeRowFilter(&values, static_cast<char *>(val_slice.mv_data), val_slice.mv_size, *fields);
+      serializer_.DeserializeRowFilter(values, static_cast<char *>(val_slice.mv_data), 
+                                      val_slice.mv_size, *fields);
     } else {
-      DeserializeRow(&values, static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+      serializer_.DeserializeRow(values, static_cast<char *>(val_slice.mv_data), 
+                                val_slice.mv_size, field_count_);
     }
     ret = mdb_cursor_get(cursor, &key_slice, &val_slice, MDB_NEXT);
   }
@@ -275,21 +233,11 @@ DB::Status LmdbDB::Update(const std::string &table, const std::string &key, std:
     throw utils::Exception(std::string("Update mdb_get: ") + mdb_strerror(ret));
   }
   std::vector<Field> current_values;
-  DeserializeRow(&current_values, static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
-  for (Field &new_field : values) {
-    bool found MAYBE_UNUSED = false;
-    for (Field &cur_field : current_values) {
-      if (cur_field.name == new_field.name) {
-        found = true;
-        cur_field.value = new_field.value;
-        break;
-      }
-    }
-    assert(found);
-  }
+  serializer_.DeserializeRow(current_values, static_cast<char *>(val_slice.mv_data), 
+                            val_slice.mv_size, field_count_);
+  serializer_.MergeUpdate(current_values, values);
 
-  std::string data;
-  SerializeRow(current_values, &data);
+  const std::string& data = serializer_.SerializeRow(current_values);
   val_slice.mv_data = const_cast<char *>(data.data());
   val_slice.mv_size = data.size();
   ret = mdb_put(txn, dbi_, &key_slice, &val_slice, 0);
@@ -311,8 +259,7 @@ DB::Status LmdbDB::Insert(const std::string &table, const std::string &key, std:
   key_slice.mv_data = static_cast<void *>(const_cast<char *>(key.data()));
   key_slice.mv_size = key.size();
 
-  std::string data;
-  SerializeRow(values, &data);
+  const std::string& data = serializer_.SerializeRow(values);
   val_slice.mv_data = static_cast<void *>(const_cast<char *>(data.data()));
   val_slice.mv_size = data.size();
 

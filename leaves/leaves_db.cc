@@ -15,6 +15,7 @@
 
 #include "core/core_workload.h"
 #include "core/db_factory.h"
+#include "utils/serialization.h"
 
 namespace {
 const std::string PROP_DBPATH = "leaves.dbpath";
@@ -104,22 +105,13 @@ DB::Status LeavesDB::Read(const std::string& table, const std::string& key,
     if (!cursor_.is_valid()) {
       return kNotFound;
     }
-
-    // Check if the key matches exactly
-    leaves::Slice found_key = cursor_.key();
-    if (found_key.size() != key.size() ||
-        std::memcmp(found_key.data(), key.data(), key.size()) != 0) {
-      return kNotFound;
-    }
-
+    
     leaves::Slice value_slice = cursor_.value();
-    std::string value_str(value_slice.data(), value_slice.size());
 
-    result.clear();
     if (fields) {
-      DeserializeRowFilter(result, value_str, *fields);
+      serializer_.DeserializeRowFilter(result, value_slice.data(), value_slice.size(), *fields);
     } else {
-      DeserializeRow(result, value_str);
+      serializer_.DeserializeRow(result, value_slice.data(), value_slice.size());
     }
 
     return kOK;
@@ -134,7 +126,7 @@ DB::Status LeavesDB::Scan(const std::string& table, const std::string& key,
                           std::vector<std::vector<Field>>& result) {
   try {
     // Create key with table prefix
-    std::string full_key = table + ":" + key;
+    std::string full_key = key;
     leaves::Slice key_slice(full_key.data(), full_key.size());
 
     cursor_.find(key_slice);
@@ -143,24 +135,15 @@ DB::Status LeavesDB::Scan(const std::string& table, const std::string& key,
     int count = 0;
 
     while (cursor_.is_valid() && count < len) {
-      leaves::Slice found_key = cursor_.key();
-      std::string found_key_str(found_key.data(), found_key.size());
-
-      // Check if key still has the table prefix
-      if (found_key_str.find(table + ":") != 0) {
-        break;
-      }
-
       leaves::Slice value_slice = cursor_.value();
-      std::string value_str(value_slice.data(), value_slice.size());
 
       std::vector<Field> values;
       if (fields) {
-        DeserializeRowFilter(values, value_str, *fields);
+        serializer_.DeserializeRowFilter(values, value_slice.data(), value_slice.size(), *fields);
       } else {
-        DeserializeRow(values, value_str);
+        serializer_.DeserializeRow(values, value_slice.data(), value_slice.size());
       }
-      result.push_back(values);
+      result.push_back(std::move(values));
 
       cursor_.next();
       count++;
@@ -177,26 +160,24 @@ DB::Status LeavesDB::Update(const std::string& table, const std::string& key,
                             std::vector<Field>& values) {
   try {
     // Create key with table prefix
-    std::string full_key = table + ":" + key;
-    leaves::Slice key_slice(full_key.data(), full_key.size());
-
+    leaves::Slice key_slice(key.data(), key.size());
     cursor_.find(key_slice);
-
     if (!cursor_.is_valid()) {
-      cursor_.rollback();
       return kNotFound;
     }
 
-    // Check if the key matches exactly
-    leaves::Slice found_key = cursor_.key();
-    if (found_key.size() != full_key.size() ||
-        std::memcmp(found_key.data(), full_key.data(), full_key.size()) != 0) {
-      cursor_.rollback();
-      return kNotFound;
-    }
+    // Read existing value
+    leaves::Slice existing_value = cursor_.value();
+    
+    // Deserialize current values
+    std::vector<Field> current_values;
+    serializer_.DeserializeRow(current_values, existing_value.data(), existing_value.size());
+    
+    // Merge update fields into current values
+    serializer_.MergeUpdate(current_values, values);
 
-    std::string data;
-    SerializeRow(values, data);
+    // Serialize and write back complete record
+    const std::string& data = serializer_.SerializeRow(current_values);
     leaves::Slice value_slice(data.data(), data.size());
     cursor_.value(value_slice);
 
@@ -211,18 +192,11 @@ DB::Status LeavesDB::Update(const std::string& table, const std::string& key,
 DB::Status LeavesDB::Insert(const std::string& table, const std::string& key,
                             std::vector<Field>& values) {
   try {
-    if (!cursor_.start_transaction()) {
-      return kError;
-    }
-
     // Create key with table prefix
-    std::string full_key = table + ":" + key;
-    leaves::Slice key_slice(full_key.data(), full_key.size());
-
+    leaves::Slice key_slice(key.data(), key.size());
     cursor_.find(key_slice);
 
-    std::string data;
-    SerializeRow(values, data);
+    const std::string& data = serializer_.SerializeRow(values);
     leaves::Slice value_slice(data.data(), data.size());
     cursor_.value(value_slice);
 
@@ -236,26 +210,12 @@ DB::Status LeavesDB::Insert(const std::string& table, const std::string& key,
 
 DB::Status LeavesDB::Delete(const std::string& table, const std::string& key) {
   try {
-    if (!cursor_.start_transaction()) {
-      return kError;
-    }
-
     // Create key with table prefix
-    std::string full_key = table + ":" + key;
-    leaves::Slice key_slice(full_key.data(), full_key.size());
+    leaves::Slice key_slice(key.data(), key.size());
 
     cursor_.find(key_slice);
 
     if (!cursor_.is_valid()) {
-      cursor_.rollback();
-      return kNotFound;
-    }
-
-    // Check if the key matches exactly
-    leaves::Slice found_key = cursor_.key();
-    if (found_key.size() != full_key.size() ||
-        std::memcmp(found_key.data(), full_key.data(), full_key.size()) != 0) {
-      cursor_.rollback();
       return kNotFound;
     }
 
@@ -266,65 +226,6 @@ DB::Status LeavesDB::Delete(const std::string& table, const std::string& key) {
     std::cerr << "Leaves Delete error: " << e.what() << std::endl;
     return kError;
   }
-}
-
-void LeavesDB::SerializeRow(const std::vector<Field>& values,
-                            std::string& data) {
-  data.clear();
-  for (const Field& field : values) {
-    uint32_t len = field.name.size();
-    data.append(reinterpret_cast<char*>(&len), sizeof(uint32_t));
-    data.append(field.name.data(), field.name.size());
-    len = field.value.size();
-    data.append(reinterpret_cast<char*>(&len), sizeof(uint32_t));
-    data.append(field.value.data(), field.value.size());
-  }
-}
-
-void LeavesDB::DeserializeRowFilter(std::vector<Field>& values,
-                                    const std::string& data,
-                                    const std::vector<std::string>& fields) {
-  const char* p = data.data();
-  const char* lim = p + data.size();
-  DeserializeRowFilter(values, p, lim, fields);
-}
-
-void LeavesDB::DeserializeRowFilter(std::vector<Field>& values, const char* p,
-                                    const char* lim,
-                                    const std::vector<std::string>& fields) {
-  std::vector<Field> row;
-  DeserializeRow(row, p, lim);
-  values.clear();
-  for (const Field& field : row) {
-    if (std::find(fields.begin(), fields.end(), field.name) != fields.end()) {
-      values.push_back(field);
-    }
-  }
-}
-
-void LeavesDB::DeserializeRow(std::vector<Field>& values,
-                              const std::string& data) {
-  const char* p = data.data();
-  const char* lim = p + data.size();
-  DeserializeRow(values, p, lim);
-}
-
-void LeavesDB::DeserializeRow(std::vector<Field>& values, const char* p,
-                              const char* lim) {
-  values.clear();
-  while (p != lim) {
-    assert(p < lim);
-    uint32_t len = *reinterpret_cast<const uint32_t*>(p);
-    p += sizeof(uint32_t);
-    std::string field_name(p, static_cast<const size_t>(len));
-    p += len;
-    len = *reinterpret_cast<const uint32_t*>(p);
-    p += sizeof(uint32_t);
-    std::string field_value(p, static_cast<const size_t>(len));
-    p += len;
-    values.push_back({field_name, field_value});
-  }
-  assert(p == lim);
 }
 
 DB* NewLeavesDB() { return new LeavesDB; }

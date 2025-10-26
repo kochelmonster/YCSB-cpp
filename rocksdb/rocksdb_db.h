@@ -13,6 +13,7 @@
 
 #include "core/db.h"
 #include "utils/properties.h"
+#include "utils/serialization.h"
 
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
@@ -58,13 +59,8 @@ class RocksdbDB : public DB {
 
   void GetOptions(const utils::Properties &props, rocksdb::Options *opt,
                   std::vector<rocksdb::ColumnFamilyDescriptor> *cf_descs);
-  static void SerializeRow(const std::vector<Field> &values, std::string &data);
-  static void DeserializeRowFilter(std::vector<Field> &values, const char *p, const char *lim,
-                                   const std::vector<std::string> &fields);
-  static void DeserializeRowFilter(std::vector<Field> &values, const std::string &data,
-                                   const std::vector<std::string> &fields);
-  static void DeserializeRow(std::vector<Field> &values, const char *p, const char *lim);
-  static void DeserializeRow(std::vector<Field> &values, const std::string &data);
+  
+  utils::Serialization serializer_;
 
   Status ReadSingle(const std::string &table, const std::string &key,
                     const std::vector<std::string> *fields, std::vector<Field> &result);

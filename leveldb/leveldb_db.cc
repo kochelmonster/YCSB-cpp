@@ -10,6 +10,7 @@
 #include "core/core_workload.h"
 #include "core/db_factory.h"
 #include "utils/utils.h"
+#include "utils/serialization.h"
 
 #include <leveldb/options.h>
 #include <leveldb/write_batch.h>
@@ -170,58 +171,7 @@ void LeveldbDB::GetOptions(const utils::Properties &props, leveldb::Options *opt
   }
 }
 
-void LeveldbDB::SerializeRow(const std::vector<Field> &values, std::string *data) {
-  for (const Field &field : values) {
-    uint32_t len = field.name.size();
-    data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t));
-    data->append(field.name.data(), field.name.size());
-    len = field.value.size();
-    data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t));
-    data->append(field.value.data(), field.value.size());
-  }
-}
-
-void LeveldbDB::DeserializeRowFilter(std::vector<Field> *values, const std::string &data,
-                                     const std::vector<std::string> &fields) {
-  const char *p = data.data();
-  const char *lim = p + data.size();
-
-  std::vector<std::string>::const_iterator filter_iter = fields.begin();
-  while (p != lim && filter_iter != fields.end()) {
-    assert(p < lim);
-    uint32_t len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    std::string field(p, static_cast<const size_t>(len));
-    p += len;
-    len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    std::string value(p, static_cast<const size_t>(len));
-    p += len;
-    if (*filter_iter == field) {
-      values->push_back({field, value});
-      filter_iter++;
-    }
-  }
-  assert(values->size() == fields.size());
-}
-
-void LeveldbDB::DeserializeRow(std::vector<Field> *values, const std::string &data) {
-  const char *p = data.data();
-  const char *lim = p + data.size();
-  while (p != lim) {
-    assert(p < lim);
-    uint32_t len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    std::string field(p, static_cast<const size_t>(len));
-    p += len;
-    len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    std::string value(p, static_cast<const size_t>(len));
-    p += len;
-    values->push_back({field, value});
-  }
-  assert(values->size() == fieldcount_);
-}
+// Serialization methods now use utils::Serialization
 
 std::string LeveldbDB::BuildCompKey(const std::string &key, const std::string &field_name) {
   switch (format_) {
@@ -259,9 +209,9 @@ DB::Status LeveldbDB::ReadSingleEntry(const std::string &table, const std::strin
     throw utils::Exception(std::string("LevelDB Get: ") + s.ToString());
   }
   if (fields != nullptr) {
-    DeserializeRowFilter(&result, data, *fields);
+    serializer_.DeserializeRowFilter(result, data, *fields);
   } else {
-    DeserializeRow(&result, data);
+    serializer_.DeserializeRow(result, data, fieldcount_);
   }
   return kOK;
 }
@@ -276,9 +226,9 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, const std::strin
     result.push_back(std::vector<Field>());
     std::vector<Field> &values = result.back();
     if (fields != nullptr) {
-      DeserializeRowFilter(&values, data, *fields);
+      serializer_.DeserializeRowFilter(values, data, *fields);
     } else {
-      DeserializeRow(&values, data);
+      serializer_.DeserializeRow(values, data, fieldcount_);
     }
     db_iter->Next();
   }
@@ -296,23 +246,12 @@ DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, const std::str
     throw utils::Exception(std::string("LevelDB Get: ") + s.ToString());
   }
   std::vector<Field> current_values;
-  DeserializeRow(&current_values, data);
-  for (Field &new_field : values) {
-    bool found MAYBE_UNUSED = false;
-    for (Field &cur_field : current_values) {
-      if (cur_field.name == new_field.name) {
-        found = true;
-        cur_field.value = new_field.value;
-        break;
-      }
-    }
-    assert(found);
-  }
+  serializer_.DeserializeRow(current_values, data, fieldcount_);
+  serializer_.MergeUpdate(current_values, values);
   leveldb::WriteOptions wopt;
 
-  data.clear();
-  SerializeRow(current_values, &data);
-  s = db_->Put(wopt, key, data);
+  const std::string& serialized_data = serializer_.SerializeRow(current_values);
+  s = db_->Put(wopt, key, serialized_data);
   if (!s.ok()) {
     throw utils::Exception(std::string("LevelDB Put: ") + s.ToString());
   }
@@ -321,8 +260,7 @@ DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, const std::str
 
 DB::Status LeveldbDB::InsertSingleEntry(const std::string &table, const std::string &key,
                                         std::vector<Field> &values) {
-  std::string data;
-  SerializeRow(values, &data);
+  const std::string& data = serializer_.SerializeRow(values);
   leveldb::WriteOptions wopt;
   leveldb::Status s = db_->Put(wopt, key, data);
   if (!s.ok()) {
