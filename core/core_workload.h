@@ -17,6 +17,7 @@
 #include "discrete_generator.h"
 #include "counter_generator.h"
 #include "acknowledged_counter_generator.h"
+#include "random_byte_generator.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
 
@@ -203,7 +204,7 @@ class CoreWorkload {
   void BuildSingleValue(std::vector<DB::Field> &update);
 
   uint64_t NextTransactionKeyNum();
-  std::string NextFieldName();
+  const std::string& NextFieldName();
 
   DB::Status TransactionRead(DB &db);
   DB::Status TransactionReadModifyWrite(DB &db);
@@ -233,6 +234,12 @@ class CoreWorkload {
   std::vector<DB::Field> values_buffer_;
   std::vector<std::string> fields_buffer_;
   std::vector<std::vector<DB::Field>> scan_result_buffer_;
+  
+  // Pre-built field names to avoid string construction in hot path
+  std::vector<std::string> field_names_;
+  
+  // Reusable random byte generator
+  RandomByteGenerator byte_generator_;
 };
 
 } // ycsbc
