@@ -59,10 +59,6 @@ class WTDB : public DB {
                            Fields &values);
   Status DeleteSingleEntry(const std::string &table, const std::string &key);
 
-  void SerializeRow(const Fields &values, std::string *data);
-  void DeserializeRow(Fields *values, const char *data_ptr, size_t data_len);
-  void DeserializeRowFilter(Fields *values, const char *data_ptr, size_t data_len, const std::unordered_set<std::string> &fields);
-
   Status (WTDB::*method_read_)(const std::string &, const std:: string &,
                                     const std::unordered_set<std::string> *, Fields &);
   Status (WTDB::*method_scan_)(const std::string &, const std::string &, int,
@@ -73,8 +69,6 @@ class WTDB : public DB {
   Status (WTDB::*method_insert_)(const std::string &, const std::string &,
                                       Fields &);
   Status (WTDB::*method_delete_)(const std::string &, const std::string &);
-  
-  unsigned fieldcount_;
 
   static WT_CONNECTION *conn_;
   WT_SESSION *session_{nullptr};
