@@ -93,8 +93,6 @@ void WTDB::Init(){
 
   const utils::Properties &props = *props_;
   const std::string &format = props.GetProperty(PROP_FORMAT, PROP_FORMAT_DEFAULT);
-  fieldcount_ = std::stoi(props.GetProperty(CoreWorkload::FIELD_COUNT_PROPERTY,
-                                            CoreWorkload::FIELD_COUNT_DEFAULT));
 
   if(format=="single"){
     method_read_ = &WTDB::ReadSingleEntry;
@@ -218,10 +216,11 @@ DB::Status WTDB::ReadSingleEntry(const std::string &table, const std::string &ke
     throw utils::Exception(WT_PREFIX " search error");
   }
   error_check(cursor_->get_value(cursor_, &v));
+  ReadonlyFields readonly((const char*)v.data, v.size);
   if (fields != nullptr) {
-    DeserializeRowFilter(&result, (const char*)v.data, v.size, *fields);
+    readonly.filter(result, *fields);
   } else {
-    DeserializeRow(&result, (const char*)v.data, v.size);
+    result = readonly;
   }
   return kOK;
 }
@@ -241,10 +240,12 @@ DB::Status WTDB::ScanSingleEntry(const std::string &table, const std::string &ke
   for(int i=0; !ret && i<len; ++i){
     error_check(cursor_->get_value(cursor_, &v));
     result.emplace_back();
+    Fields &values = result.back();
+    ReadonlyFields readonly((const char*)v.data, v.size);
     if (fields != nullptr) {
-      DeserializeRowFilter(&result.back(), (const char*)v.data, v.size, *fields);
+      readonly.filter(values, *fields);
     } else {
-      DeserializeRow(&result.back(), (const char*)v.data, v.size);
+      values = readonly;
     }
   }
   return kOK;
@@ -265,11 +266,15 @@ DB::Status WTDB::UpdateSingleEntry(const std::string &table, const std::string &
     throw utils::Exception(WT_PREFIX " search error");
   }
   error_check(cursor_->get_value(cursor_, &v));
-  DeserializeRow(&current_values, (const char*)v.data, v.size);
+  ReadonlyFields readonly((const char*)v.data, v.size);
+  current_values = readonly;
+  
   Slice updated_data = current_values.update(values);
-
-  v.data = updated_data.data();
-  v.size = updated_data.size();
+  
+  // Copy the slice data to ensure it stays alive during WiredTiger operations
+  std::string update_copy(updated_data.data(), updated_data.size());
+  v.data = update_copy.data();
+  v.size = update_copy.size();
   cursor_->set_value(cursor_, &v);
   ret = cursor_->update(cursor_);
   if(ret==WT_NOTFOUND){
@@ -282,11 +287,10 @@ DB::Status WTDB::UpdateSingleEntry(const std::string &table, const std::string &
 
 DB::Status WTDB::InsertSingleEntry(const std::string &table, const std::string &key,
                            Fields &values){
-  std::string data;
   WT_ITEM k = {key.data(), key.size()}, v;
   
   cursor_->set_key(cursor_, &k);
-  SerializeRow(values, &data);
+  const std::string& data = values.buffer();
   v.data = data.data();
   v.size = data.size();
   cursor_->set_value(cursor_, &v);
@@ -299,57 +303,6 @@ DB::Status WTDB::DeleteSingleEntry(const std::string &table, const std::string &
   cursor_->set_key(cursor_, &k);
   error_check(cursor_->remove(cursor_));
   return kOK;
-}
-
-void WTDB::SerializeRow(const Fields &values, std::string *data) {
-  for (auto it = values.begin(); it != values.end(); ++it) {
-    auto [name, value] = *it;
-    uint32_t len = name.size();
-    data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t)); // 4B
-    data->append(name.data(), name.size());                         // len(name)
-    len = value.size();
-    data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t)); // 4B
-    data->append(value.data(), value.size());                       // len(value)
-  }
-}
-
-void WTDB::DeserializeRow(Fields *values, const char *data_ptr, size_t data_len) {
-  const char *p = data_ptr;
-  const char *lim = p + data_len;
-  while (p != lim) {
-    assert(p < lim);
-    uint32_t len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    const char *field_name = p;
-    p += len;
-    uint32_t value_len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    const char *field_value = p;
-    p += value_len;
-    values->add(field_name, len, field_value, value_len);
-  }
-  assert(values->size() == fieldcount_);
-}
-
-void WTDB::DeserializeRowFilter(Fields *values, const char *data_ptr, size_t data_len,
-                                  const std::unordered_set<std::string> &fields) {
-  const char *p = data_ptr;
-  const char *lim = p + data_len;
-  while (p != lim) {
-    assert(p < lim);
-    uint32_t len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    const char *field_name = p;
-    p += len;
-    uint32_t value_len = *reinterpret_cast<const uint32_t *>(p);
-    p += sizeof(uint32_t);
-    const char *field_value = p;
-    p += value_len;
-    if (fields.find(std::string(field_name, len)) != fields.end()) {
-      values->add(field_name, len, field_value, value_len);
-    }
-  }
-  assert(values->size() == fields.size());
 }
 
 DB *NewWTDB() {
