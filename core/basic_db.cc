@@ -29,7 +29,7 @@ void BasicDB::Init() {
 }
 
 DB::Status BasicDB::Read(const std::string &table, const std::string &key,
-                         const std::vector<std::string> *fields, std::vector<Field> &result) {
+                         const std::unordered_set<std::string> *fields, Fields &result) {
   std::lock_guard<std::mutex> lock(mutex_);
   *out_ << "READ " << table << ' ' << key;
   if (fields) {
@@ -45,8 +45,8 @@ DB::Status BasicDB::Read(const std::string &table, const std::string &key,
 }
 
 DB::Status BasicDB::Scan(const std::string &table, const std::string &key, int len,
-                         const std::vector<std::string> *fields,
-                         std::vector<std::vector<Field>> &result) {
+                         const std::unordered_set<std::string> *fields,
+                         std::vector<Fields> &result) {
   std::lock_guard<std::mutex> lock(mutex_);
   *out_ << "SCAN " << table << ' ' << key << " " << len;
   if (fields) {
@@ -62,22 +62,24 @@ DB::Status BasicDB::Scan(const std::string &table, const std::string &key, int l
 }
 
 DB::Status BasicDB::Update(const std::string &table, const std::string &key,
-                           std::vector<Field> &values) {
+                           Fields &values) {
   std::lock_guard<std::mutex> lock(mutex_);
   *out_ << "UPDATE " << table << ' ' << key << " [ ";
-  for (auto v : values) {
-    *out_ << v.name << '=' << v.value << ' ';
+  for (auto it = values.begin(); it != values.end(); ++it) {
+    auto [name, value] = *it;
+    *out_ << name.ToString() << '=' << value.ToString() << ' ';
   }
   *out_ << ']' << std::endl;
   return kOK;
 }
 
 DB::Status BasicDB::Insert(const std::string &table, const std::string &key,
-                           std::vector<Field> &values) {
+                           Fields &values) {
   std::lock_guard<std::mutex> lock(mutex_);
   *out_ << "INSERT " << table << ' ' << key << " [ ";
-  for (auto v : values) {
-    *out_ << v.name << '=' << v.value << ' ';
+  for (auto it = values.begin(); it != values.end(); ++it) {
+    auto [name, value] = *it;
+    *out_ << name.ToString() << '=' << value.ToString() << ' ';
   }
   *out_ << ']' << std::endl;
   return kOK;

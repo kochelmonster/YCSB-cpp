@@ -252,27 +252,33 @@ std::string CoreWorkload::BuildKeyName(uint64_t key_num) {
   return key_buffer_;
 }
 
-void CoreWorkload::BuildValues(std::vector<ycsbc::DB::Field> &values) {
+void CoreWorkload::BuildValues(Fields &values) {
+  values.clear();
   for (int i = 0; i < field_count_; ++i) {
-    values.push_back(DB::Field());
-    ycsbc::DB::Field &field = values.back();
-    // Use pre-built field name instead of constructing each time
-    field.name = field_names_[i];
+    // Use pre-built field name
+    const std::string& field_name = field_names_[i];
     uint64_t len = field_len_generator_->Next();
-    field.value.reserve(len);
-    // Use class member byte_generator_ instead of creating new instance
-    std::generate_n(std::back_inserter(field.value), len, [this]() { return byte_generator_.Next(); } );
+    
+    // Build value string
+    std::string field_value;
+    field_value.reserve(len);
+    std::generate_n(std::back_inserter(field_value), len, [this]() { return byte_generator_.Next(); });
+    
+    values.push(field_name, field_value);
   }
 }
 
-void CoreWorkload::BuildSingleValue(std::vector<ycsbc::DB::Field> &values) {
-  values.push_back(DB::Field());
-  ycsbc::DB::Field &field = values.back();
-  field.name = NextFieldName();
+void CoreWorkload::BuildSingleValue(Fields &values) {
+  values.clear();
+  const std::string& field_name = NextFieldName();
   uint64_t len = field_len_generator_->Next();
-  field.value.reserve(len);
-  // Use class member byte_generator_ instead of creating new instance
-  std::generate_n(std::back_inserter(field.value), len, [this]() { return byte_generator_.Next(); } );
+  
+  // Build value string
+  std::string field_value;
+  field_value.reserve(len);
+  std::generate_n(std::back_inserter(field_value), len, [this]() { return byte_generator_.Next(); });
+  
+  values.push(field_name, field_value);
 }
 
 uint64_t CoreWorkload::NextTransactionKeyNum() {
@@ -325,7 +331,7 @@ DB::Status CoreWorkload::TransactionRead(DB &db) {
   result_buffer_.clear();
   if (!read_all_fields()) {
     fields_buffer_.clear();
-    fields_buffer_.push_back(NextFieldName());
+    fields_buffer_.insert(NextFieldName());
     return db.Read(table_name_, key_buffer_, &fields_buffer_, result_buffer_);
   } else {
     return db.Read(table_name_, key_buffer_, NULL, result_buffer_);
@@ -339,7 +345,7 @@ DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
 
   if (!read_all_fields()) {
     fields_buffer_.clear();
-    fields_buffer_.push_back(NextFieldName());
+    fields_buffer_.insert(NextFieldName());
     db.Read(table_name_, key_buffer_, &fields_buffer_, result_buffer_);
   } else {
     db.Read(table_name_, key_buffer_, NULL, result_buffer_);
@@ -361,7 +367,7 @@ DB::Status CoreWorkload::TransactionScan(DB &db) {
   scan_result_buffer_.clear();
   if (!read_all_fields()) {
     fields_buffer_.clear();
-    fields_buffer_.push_back(NextFieldName());
+    fields_buffer_.insert(NextFieldName());
     return db.Scan(table_name_, key_buffer_, len, &fields_buffer_, scan_result_buffer_);
   } else {
     return db.Scan(table_name_, key_buffer_, len, NULL, scan_result_buffer_);

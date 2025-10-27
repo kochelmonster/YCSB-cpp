@@ -13,7 +13,6 @@
 
 #include "core/db.h"
 #include "utils/properties.h"
-#include "utils/serialization.h"
 
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
@@ -30,20 +29,20 @@ class RocksdbDB : public DB {
   void Cleanup();
 
   Status Read(const std::string &table, const std::string &key,
-              const std::vector<std::string> *fields, std::vector<Field> &result) {
+              const std::unordered_set<std::string> *fields, Fields &result) {
     return (this->*(method_read_))(table, key, fields, result);
   }
 
   Status Scan(const std::string &table, const std::string &key, int len,
-              const std::vector<std::string> *fields, std::vector<std::vector<Field>> &result) {
+              const std::unordered_set<std::string> *fields, std::vector<Fields> &result) {
     return (this->*(method_scan_))(table, key, len, fields, result);
   }
 
-  Status Update(const std::string &table, const std::string &key, std::vector<Field> &values) {
+  Status Update(const std::string &table, const std::string &key, Fields &values) {
     return (this->*(method_update_))(table, key, values);
   }
 
-  Status Insert(const std::string &table, const std::string &key, std::vector<Field> &values) {
+  Status Insert(const std::string &table, const std::string &key, Fields &values) {
     return (this->*(method_insert_))(table, key, values);
   }
 
@@ -59,31 +58,29 @@ class RocksdbDB : public DB {
 
   void GetOptions(const utils::Properties &props, rocksdb::Options *opt,
                   std::vector<rocksdb::ColumnFamilyDescriptor> *cf_descs);
-  
-  utils::Serialization serializer_;
 
   Status ReadSingle(const std::string &table, const std::string &key,
-                    const std::vector<std::string> *fields, std::vector<Field> &result);
+                    const std::unordered_set<std::string> *fields, Fields &result);
   Status ScanSingle(const std::string &table, const std::string &key, int len,
-                    const std::vector<std::string> *fields,
-                    std::vector<std::vector<Field>> &result);
+                    const std::unordered_set<std::string> *fields,
+                    std::vector<Fields> &result);
   Status UpdateSingle(const std::string &table, const std::string &key,
-                      std::vector<Field> &values);
+                      Fields &values);
   Status MergeSingle(const std::string &table, const std::string &key,
-                     std::vector<Field> &values);
+                     Fields &values);
   Status InsertSingle(const std::string &table, const std::string &key,
-                      std::vector<Field> &values);
+                      Fields &values);
   Status DeleteSingle(const std::string &table, const std::string &key);
 
   Status (RocksdbDB::*method_read_)(const std::string &, const std:: string &,
-                                    const std::vector<std::string> *, std::vector<Field> &);
+                                    const std::unordered_set<std::string> *, Fields &);
   Status (RocksdbDB::*method_scan_)(const std::string &, const std::string &,
-                                    int, const std::vector<std::string> *,
-                                    std::vector<std::vector<Field>> &);
+                                    int, const std::unordered_set<std::string> *,
+                                    std::vector<Fields> &);
   Status (RocksdbDB::*method_update_)(const std::string &, const std::string &,
-                                      std::vector<Field> &);
+                                      Fields &);
   Status (RocksdbDB::*method_insert_)(const std::string &, const std::string &,
-                                      std::vector<Field> &);
+                                      Fields &);
   Status (RocksdbDB::*method_delete_)(const std::string &, const std::string &);
 
   int fieldcount_;

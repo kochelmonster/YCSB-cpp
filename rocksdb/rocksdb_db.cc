@@ -11,7 +11,6 @@
 #include "core/core_workload.h"
 #include "core/db_factory.h"
 #include "utils/utils.h"
-#include "utils/serialization.h"
 
 #include <rocksdb/cache.h>
 #include <rocksdb/filter_policy.h>
@@ -127,36 +126,20 @@ void RocksdbDB::Init() {
 // merge operator disabled by default due to link error
 #ifdef USE_MERGEUPDATE
   class YCSBUpdateMerge : public rocksdb::AssociativeMergeOperator {
-   private:
-    utils::Serialization serializer_;
-    
    public:
     virtual bool Merge(const rocksdb::Slice &key, const rocksdb::Slice *existing_value,
                        const rocksdb::Slice &value, std::string *new_value,
                        rocksdb::Logger *logger) const override {
       assert(existing_value);
 
-      std::vector<Field> values;
-      const_cast<utils::Serialization&>(serializer_).DeserializeRow(values, existing_value->data(), existing_value->size());
+      Fields values;
+      ReadonlyFields readonly_existing(existing_value->data(), existing_value->size());
+      values = readonly_existing;
 
-      std::vector<Field> new_values;
-      const_cast<utils::Serialization&>(serializer_).DeserializeRow(new_values, value.data(), value.size());
+      ReadonlyFields readonly_new(value.data(), value.size());
 
-      for (Field &new_field : new_values) {
-        bool found = false;
-        for (Field &field : values) {
-          if (field.name == new_field.name) {
-            found = true;
-            field.value = new_field.value;
-            break;
-          }
-        }
-        if (!found) {
-          values.push_back(new_field);
-        }
-      }
-
-      *new_value = const_cast<utils::Serialization&>(serializer_).SerializeRow(values);
+      Slice updated_data = values.update(readonly_new);
+      *new_value = std::string(updated_data.data(), updated_data.size());
       return true;
     }
 
@@ -374,11 +357,9 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
   }
 }
 
-// Serialization methods now use utils::Serialization
-
 DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &key,
-                                 const std::vector<std::string> *fields,
-                                 std::vector<Field> &result) {
+                                 const std::unordered_set<std::string> *fields,
+                                 Fields &result) {
   std::string data;
   rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
   if (s.IsNotFound()) {
@@ -386,27 +367,29 @@ DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &ke
   } else if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
   }
+  ReadonlyFields readonly(data.data(), data.size());
   if (fields != nullptr) {
-    serializer_.DeserializeRowFilter(result, data, *fields);
+    readonly.filter(result, *fields);
   } else {
-    serializer_.DeserializeRow(result, data, fieldcount_);
+    result = readonly;
   }
   return kOK;
 }
 
 DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &key, int len,
-                                 const std::vector<std::string> *fields,
-                                 std::vector<std::vector<Field>> &result) {
+                                 const std::unordered_set<std::string> *fields,
+                                 std::vector<Fields> &result) {
   rocksdb::Iterator *db_iter = db_->NewIterator(rocksdb::ReadOptions());
   db_iter->Seek(key);
   for (int i = 0; db_iter->Valid() && i < len; i++) {
     std::string data = db_iter->value().ToString();
-    result.push_back(std::vector<Field>());
-    std::vector<Field> &values = result.back();
+    result.emplace_back();
+    Fields &values = result.back();
+    ReadonlyFields readonly(data.data(), data.size());
     if (fields != nullptr) {
-      serializer_.DeserializeRowFilter(values, data, *fields);
+      readonly.filter(values, *fields);
     } else {
-      serializer_.DeserializeRow(values, data, fieldcount_);
+      values = readonly;
     }
     db_iter->Next();
   }
@@ -415,7 +398,7 @@ DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &ke
 }
 
 DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &key,
-                                   std::vector<Field> &values) {
+                                   Fields &values) {
   std::string data;
   rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
   if (s.IsNotFound()) {
@@ -423,12 +406,13 @@ DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &
   } else if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
   }
-  std::vector<Field> current_values;
-  serializer_.DeserializeRow(current_values, data, fieldcount_);
-  serializer_.MergeUpdate(current_values, values);
+  Fields current_values;
+  ReadonlyFields readonly(data.data(), data.size());
+  current_values = readonly;
+  
+  Slice updated_data = current_values.update(values);
 
-  const std::string& serialized_data = serializer_.SerializeRow(current_values);
-  s = db_->Put(wopt_, key, serialized_data);
+  s = db_->Put(wopt_, key, rocksdb::Slice(updated_data.data(), updated_data.size()));
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
   }
@@ -436,8 +420,8 @@ DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &
 }
 
 DB::Status RocksdbDB::MergeSingle(const std::string &table, const std::string &key,
-                                  std::vector<Field> &values) {
-  const std::string& data = serializer_.SerializeRow(values);
+                                  Fields &values) {
+  const std::string& data = values.buffer();
   rocksdb::Status s = db_->Merge(wopt_, key, data);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Merge: ") + s.ToString());
@@ -446,8 +430,8 @@ DB::Status RocksdbDB::MergeSingle(const std::string &table, const std::string &k
 }
 
 DB::Status RocksdbDB::InsertSingle(const std::string &table, const std::string &key,
-                                   std::vector<Field> &values) {
-  const std::string& data = serializer_.SerializeRow(values);
+                                   Fields &values) {
+  const std::string& data = values.buffer();
   rocksdb::Status s = db_->Put(wopt_, key, data);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());

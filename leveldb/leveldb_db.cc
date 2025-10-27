@@ -10,7 +10,6 @@
 #include "core/core_workload.h"
 #include "core/db_factory.h"
 #include "utils/utils.h"
-#include "utils/serialization.h"
 
 #include <leveldb/options.h>
 #include <leveldb/write_batch.h>
@@ -171,8 +170,6 @@ void LeveldbDB::GetOptions(const utils::Properties &props, leveldb::Options *opt
   }
 }
 
-// Serialization methods now use utils::Serialization
-
 std::string LeveldbDB::BuildCompKey(const std::string &key, const std::string &field_name) {
   switch (format_) {
     case kRowMajor:
@@ -199,8 +196,8 @@ std::string LeveldbDB::FieldFromCompKey(const std::string &comp_key) {
 }
 
 DB::Status LeveldbDB::ReadSingleEntry(const std::string &table, const std::string &key,
-                                      const std::vector<std::string> *fields,
-                                      std::vector<Field> &result) {
+                                      const std::unordered_set<std::string> *fields,
+                                      Fields &result) {
   std::string data;
   leveldb::Status s = db_->Get(leveldb::ReadOptions(), key, &data);
   if (s.IsNotFound()) {
@@ -208,27 +205,29 @@ DB::Status LeveldbDB::ReadSingleEntry(const std::string &table, const std::strin
   } else if (!s.ok()) {
     throw utils::Exception(std::string("LevelDB Get: ") + s.ToString());
   }
+  ReadonlyFields readonly(data.data(), data.size());
   if (fields != nullptr) {
-    serializer_.DeserializeRowFilter(result, data, *fields);
+    readonly.filter(result, *fields);
   } else {
-    serializer_.DeserializeRow(result, data, fieldcount_);
+    result = readonly;
   }
   return kOK;
 }
 
 DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, const std::string &key, int len,
-                                      const std::vector<std::string> *fields,
-                                      std::vector<std::vector<Field>> &result) {
+                                      const std::unordered_set<std::string> *fields,
+                                      std::vector<Fields> &result) {
   leveldb::Iterator *db_iter = db_->NewIterator(leveldb::ReadOptions());
   db_iter->Seek(key);
   for (int i = 0; db_iter->Valid() && i < len; i++) {
     std::string data = db_iter->value().ToString();
-    result.push_back(std::vector<Field>());
-    std::vector<Field> &values = result.back();
+    result.emplace_back();
+    Fields &values = result.back();
+    ReadonlyFields readonly(data.data(), data.size());
     if (fields != nullptr) {
-      serializer_.DeserializeRowFilter(values, data, *fields);
+      readonly.filter(values, *fields);
     } else {
-      serializer_.DeserializeRow(values, data, fieldcount_);
+      values = readonly;
     }
     db_iter->Next();
   }
@@ -237,7 +236,7 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, const std::strin
 }
 
 DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, const std::string &key,
-                                        std::vector<Field> &values) {
+                                        Fields &values) {
   std::string data;
   leveldb::Status s = db_->Get(leveldb::ReadOptions(), key, &data);
   if (s.IsNotFound()) {
@@ -245,13 +244,14 @@ DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, const std::str
   } else if (!s.ok()) {
     throw utils::Exception(std::string("LevelDB Get: ") + s.ToString());
   }
-  std::vector<Field> current_values;
-  serializer_.DeserializeRow(current_values, data, fieldcount_);
-  serializer_.MergeUpdate(current_values, values);
+  Fields current_values;
+  ReadonlyFields readonly(data.data(), data.size());
+  current_values = readonly;
+  
+  Slice updated_data = current_values.update(values);
   leveldb::WriteOptions wopt;
 
-  const std::string& serialized_data = serializer_.SerializeRow(current_values);
-  s = db_->Put(wopt, key, serialized_data);
+  s = db_->Put(wopt, key, leveldb::Slice(updated_data.data(), updated_data.size()));
   if (!s.ok()) {
     throw utils::Exception(std::string("LevelDB Put: ") + s.ToString());
   }
@@ -259,8 +259,8 @@ DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, const std::str
 }
 
 DB::Status LeveldbDB::InsertSingleEntry(const std::string &table, const std::string &key,
-                                        std::vector<Field> &values) {
-  const std::string& data = serializer_.SerializeRow(values);
+                                        Fields &values) {
+  const std::string& data = values.buffer();
   leveldb::WriteOptions wopt;
   leveldb::Status s = db_->Put(wopt, key, data);
   if (!s.ok()) {
@@ -279,16 +279,15 @@ DB::Status LeveldbDB::DeleteSingleEntry(const std::string &table, const std::str
 }
 
 DB::Status LeveldbDB::ReadCompKeyRM(const std::string &table, const std::string &key,
-                                    const std::vector<std::string> *fields,
-                                    std::vector<Field> &result) {
+                                    const std::unordered_set<std::string> *fields,
+                                    Fields &result) {
   leveldb::Iterator *db_iter = db_->NewIterator(leveldb::ReadOptions());
   db_iter->Seek(key);
   if (!db_iter->Valid() || KeyFromCompKey(db_iter->key().ToString()) != key) {
     return kNotFound;
   }
   if (fields != nullptr) {
-    std::vector<std::string>::const_iterator filter_iter = fields->begin();
-    for (int i = 0; i < fieldcount_ && filter_iter != fields->end() && db_iter->Valid(); i++) {
+    for (int i = 0; i < fieldcount_ && db_iter->Valid(); i++) {
       std::string comp_key = db_iter->key().ToString();
       std::string cur_val = db_iter->value().ToString();
       std::string cur_key = KeyFromCompKey(comp_key);
@@ -296,9 +295,8 @@ DB::Status LeveldbDB::ReadCompKeyRM(const std::string &table, const std::string 
       assert(cur_key == key);
       assert(cur_field == field_prefix_ + std::to_string(i));
 
-      if (cur_field == *filter_iter) {
-        result.push_back({cur_field, cur_val});
-        filter_iter++;
+      if (fields->find(cur_field) != fields->end()) {
+        result.add(cur_field, cur_val);
       }
       db_iter->Next();
     }
@@ -312,7 +310,7 @@ DB::Status LeveldbDB::ReadCompKeyRM(const std::string &table, const std::string 
       assert(cur_key == key);
       assert(cur_field == field_prefix_ + std::to_string(i));
 
-      result.push_back({cur_field, cur_val});
+      result.add(cur_field, cur_val);
       db_iter->Next();
     }
     assert(result.size() == fieldcount_);
@@ -322,26 +320,24 @@ DB::Status LeveldbDB::ReadCompKeyRM(const std::string &table, const std::string 
 }
 
 DB::Status LeveldbDB::ScanCompKeyRM(const std::string &table, const std::string &key, int len,
-                                    const std::vector<std::string> *fields,
-                                    std::vector<std::vector<Field>> &result) {
+                                    const std::unordered_set<std::string> *fields,
+                                    std::vector<Fields> &result) {
   leveldb::Iterator *db_iter = db_->NewIterator(leveldb::ReadOptions());
   db_iter->Seek(key);
   assert(db_iter->Valid() && KeyFromCompKey(db_iter->key().ToString()) == key);
   for (int i = 0; i < len && db_iter->Valid(); i++) {
-    result.push_back(std::vector<Field>());
-    std::vector<Field> &values = result.back();
+    result.emplace_back();
+    Fields &values = result.back();
     if (fields != nullptr) {
-      std::vector<std::string>::const_iterator filter_iter = fields->begin();
-      for (int j = 0; j < fieldcount_ && filter_iter != fields->end() && db_iter->Valid(); j++) {
+      for (int j = 0; j < fieldcount_ && db_iter->Valid(); j++) {
         std::string comp_key = db_iter->key().ToString();
         std::string cur_val = db_iter->value().ToString();
         std::string cur_key = KeyFromCompKey(comp_key);
         std::string cur_field = FieldFromCompKey(comp_key);
         assert(cur_field == field_prefix_ + std::to_string(j));
 
-        if (cur_field == *filter_iter) {
-          values.push_back({cur_field, cur_val});
-          filter_iter++;
+        if (fields->find(cur_field) != fields->end()) {
+          values.add(cur_field, cur_val);
         }
         db_iter->Next();
       }
@@ -354,7 +350,7 @@ DB::Status LeveldbDB::ScanCompKeyRM(const std::string &table, const std::string 
         std::string cur_field = FieldFromCompKey(comp_key);
         assert(cur_field == field_prefix_ + std::to_string(j));
 
-        values.push_back({cur_field, cur_val});
+        values.add(cur_field, cur_val);
         db_iter->Next();
       }
       assert(values.size() == fieldcount_);
@@ -365,26 +361,27 @@ DB::Status LeveldbDB::ScanCompKeyRM(const std::string &table, const std::string 
 }
 
 DB::Status LeveldbDB::ReadCompKeyCM(const std::string &table, const std::string &key,
-                                    const std::vector<std::string> *fields,
-                                    std::vector<Field> &result) {
+                                      const std::unordered_set<std::string> *fields,
+                                      Fields &result) {
   return kNotImplemented;
 }
 
 DB::Status LeveldbDB::ScanCompKeyCM(const std::string &table, const std::string &key, int len,
-                                    const std::vector<std::string> *fields,
-                                    std::vector<std::vector<Field>> &result) {
+                                      const std::unordered_set<std::string> *fields,
+                                      std::vector<Fields> &result) {
   return kNotImplemented;
 }
 
 DB::Status LeveldbDB::InsertCompKey(const std::string &table, const std::string &key,
-                                    std::vector<Field> &values) {
+                                    Fields &values) {
   leveldb::WriteOptions wopt;
   leveldb::WriteBatch batch;
 
   std::string comp_key;
-  for (Field &field : values) {
-    comp_key = BuildCompKey(key, field.name);
-    batch.Put(comp_key, field.value);
+  for (auto it = values.begin(); it != values.end(); ++it) {
+    auto [name, value] = *it;
+    comp_key = BuildCompKey(key, std::string(name.data(), name.size()));
+    batch.Put(comp_key, leveldb::Slice(value.data(), value.size()));
   }
 
   leveldb::Status s = db_->Write(wopt, &batch);

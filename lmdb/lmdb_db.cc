@@ -18,7 +18,6 @@
 #include "core/db_factory.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
-#include "utils/serialization.h"
 
 #include <lmdb.h>
 
@@ -134,10 +133,8 @@ void LmdbDB::Cleanup() {
   mdb_env_close(env_);
 }
 
-// Serialization methods now use utils::Serialization
-
-DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const std::vector<std::string> *fields,
-                        std::vector<Field> &result) {
+DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const std::unordered_set<std::string> *fields,
+                        Fields &result) {
   DB::Status s = kOK;
   MDB_txn *txn;
   MDB_val key_slice, val_slice;
@@ -161,11 +158,11 @@ DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const 
     throw utils::Exception(std::string("Read mdb_get: ") + mdb_strerror(ret));
   }
   if (fields != nullptr) {
-    serializer_.DeserializeRowFilter(result, static_cast<char *>(val_slice.mv_data), 
-                                     val_slice.mv_size, *fields);
+    ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+    readonly.filter(result, *fields);
   } else {
-    serializer_.DeserializeRow(result, static_cast<char *>(val_slice.mv_data), 
-                              val_slice.mv_size, field_count_);
+    ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+    result = readonly;
   }
   // Abort instead of commit for read-only transactions (faster)
   mdb_txn_abort(txn);
@@ -173,7 +170,8 @@ DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const 
 }
 
 DB::Status LmdbDB::Scan(const std::string &table, const std::string &key, int len,
-                        const std::vector<std::string> *fields, std::vector<std::vector<Field>> &result) {
+                        const std::unordered_set<std::string> *fields,
+                        std::vector<Fields> &result) {
   DB::Status s = kOK;
   MDB_txn *txn;
   MDB_cursor *cursor;
@@ -199,14 +197,14 @@ DB::Status LmdbDB::Scan(const std::string &table, const std::string &key, int le
     throw utils::Exception(std::string("Scan mdb_cursor_get: ") + mdb_strerror(ret));
   }
   for (int i = 0; !ret && i < len; i++) {
-    result.push_back(std::vector<Field>());
-    std::vector<Field> &values = result.back();
+    result.emplace_back();
+    Fields &values = result.back();
     if (fields != nullptr) {
-      serializer_.DeserializeRowFilter(values, static_cast<char *>(val_slice.mv_data), 
-                                      val_slice.mv_size, *fields);
+      ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+      readonly.filter(values, *fields);
     } else {
-      serializer_.DeserializeRow(values, static_cast<char *>(val_slice.mv_data), 
-                                val_slice.mv_size, field_count_);
+      ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+      values = readonly;
     }
     ret = mdb_cursor_get(cursor, &key_slice, &val_slice, MDB_NEXT);
   }
@@ -216,7 +214,7 @@ cleanup:
   return s;
 }
 
-DB::Status LmdbDB::Update(const std::string &table, const std::string &key, std::vector<Field> &values) {
+DB::Status LmdbDB::Update(const std::string &table, const std::string &key, Fields &values) {
   MDB_txn *txn;
   MDB_val key_slice, val_slice;
 
@@ -232,14 +230,14 @@ DB::Status LmdbDB::Update(const std::string &table, const std::string &key, std:
   if (ret) {
     throw utils::Exception(std::string("Update mdb_get: ") + mdb_strerror(ret));
   }
-  std::vector<Field> current_values;
-  serializer_.DeserializeRow(current_values, static_cast<char *>(val_slice.mv_data), 
-                            val_slice.mv_size, field_count_);
-  serializer_.MergeUpdate(current_values, values);
+  Fields current_values;
+  ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+  current_values = readonly;
+  
+  Slice updated_data = current_values.update(values);
 
-  const std::string& data = serializer_.SerializeRow(current_values);
-  val_slice.mv_data = const_cast<char *>(data.data());
-  val_slice.mv_size = data.size();
+  val_slice.mv_data = const_cast<char *>(updated_data.data());
+  val_slice.mv_size = updated_data.size();
   ret = mdb_put(txn, dbi_, &key_slice, &val_slice, 0);
   if (ret) {
     throw utils::Exception(std::string("Update mdb_put: ") + mdb_strerror(ret));
@@ -252,14 +250,14 @@ DB::Status LmdbDB::Update(const std::string &table, const std::string &key, std:
   return kOK;
 }
 
-DB::Status LmdbDB::Insert(const std::string &table, const std::string &key, std::vector<Field> &values) {
+DB::Status LmdbDB::Insert(const std::string &table, const std::string &key, Fields &values) {
   MDB_txn *txn;
   MDB_val key_slice, val_slice;
 
   key_slice.mv_data = static_cast<void *>(const_cast<char *>(key.data()));
   key_slice.mv_size = key.size();
 
-  const std::string& data = serializer_.SerializeRow(values);
+  const std::string& data = values.buffer();
   val_slice.mv_data = static_cast<void *>(const_cast<char *>(data.data()));
   val_slice.mv_size = data.size();
 
