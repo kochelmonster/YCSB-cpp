@@ -31,7 +31,7 @@ class DBWrapper : public DB {
     db_->Cleanup();
   }
   Status Read(const std::string &table, const std::string &key,
-              const std::vector<std::string> *fields, std::vector<Field> &result) {
+              const std::unordered_set<std::string> *fields, Fields &result) {
     timer_.Start();
     Status s = db_->Read(table, key, fields, result);
     uint64_t elapsed = timer_.End();
@@ -43,7 +43,7 @@ class DBWrapper : public DB {
     return s;
   }
   Status Scan(const std::string &table, const std::string &key, int record_count,
-              const std::vector<std::string> *fields, std::vector<std::vector<Field>> &result) {
+              const std::unordered_set<std::string> *fields, std::vector<Fields> &result) {
     timer_.Start();
     Status s = db_->Scan(table, key, record_count, fields, result);
     uint64_t elapsed = timer_.End();
@@ -54,7 +54,7 @@ class DBWrapper : public DB {
     }
     return s;
   }
-  Status Update(const std::string &table, const std::string &key, std::vector<Field> &values) {
+  Status Update(const std::string &table, const std::string &key, Fields &values) {
     timer_.Start();
     Status s = db_->Update(table, key, values);
     uint64_t elapsed = timer_.End();
@@ -65,7 +65,7 @@ class DBWrapper : public DB {
     }
     return s;
   }
-  Status Insert(const std::string &table, const std::string &key, std::vector<Field> &values) {
+  Status Insert(const std::string &table, const std::string &key, Fields &values) {
     timer_.Start();
     Status s = db_->Insert(table, key, values);
     uint64_t elapsed = timer_.End();

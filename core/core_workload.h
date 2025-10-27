@@ -12,6 +12,7 @@
 
 #include <vector>
 #include <string>
+#include <unordered_set>
 #include "db.h"
 #include "generator.h"
 #include "discrete_generator.h"
@@ -200,8 +201,8 @@ class CoreWorkload {
  protected:
   static Generator<uint64_t> *GetFieldLenGenerator(const utils::Properties &p);
   std::string BuildKeyName(uint64_t key_num);
-  void BuildValues(std::vector<DB::Field> &values);
-  void BuildSingleValue(std::vector<DB::Field> &update);
+  void BuildValues(Fields &values);
+  void BuildSingleValue(Fields &update);
 
   uint64_t NextTransactionKeyNum();
   const std::string& NextFieldName();
@@ -230,10 +231,10 @@ class CoreWorkload {
   
   // Reusable buffers to avoid allocations in hot path
   std::string key_buffer_;
-  std::vector<DB::Field> result_buffer_;
-  std::vector<DB::Field> values_buffer_;
-  std::vector<std::string> fields_buffer_;
-  std::vector<std::vector<DB::Field>> scan_result_buffer_;
+  Fields result_buffer_;
+  Fields values_buffer_;
+  std::unordered_set<std::string> fields_buffer_;
+  std::vector<Fields> scan_result_buffer_;
   
   // Pre-built field names to avoid string construction in hot path
   std::vector<std::string> field_names_;

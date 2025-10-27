@@ -15,7 +15,6 @@
 
 #include "core/core_workload.h"
 #include "core/db_factory.h"
-#include "utils/serialization.h"
 
 namespace {
 const std::string PROP_DBPATH = "leaves.dbpath";
@@ -94,8 +93,8 @@ void LeavesDB::Cleanup() {
 }
 
 DB::Status LeavesDB::Read(const std::string& table, const std::string& key,
-                          const std::vector<std::string>* fields,
-                          std::vector<Field>& result) {
+                          const std::unordered_set<std::string>* fields,
+                          Fields& result) {
   try {
     // Create key with table prefix
     leaves::Slice key_slice(key.data(), key.size());
@@ -108,10 +107,11 @@ DB::Status LeavesDB::Read(const std::string& table, const std::string& key,
     
     leaves::Slice value_slice = cursor_.value();
 
+    ReadonlyFields readonly(value_slice.data(), value_slice.size());
     if (fields) {
-      serializer_.DeserializeRowFilter(result, value_slice.data(), value_slice.size(), *fields);
+      readonly.filter(result, *fields);
     } else {
-      serializer_.DeserializeRow(result, value_slice.data(), value_slice.size());
+      result = readonly;
     }
 
     return kOK;
@@ -122,8 +122,8 @@ DB::Status LeavesDB::Read(const std::string& table, const std::string& key,
 }
 
 DB::Status LeavesDB::Scan(const std::string& table, const std::string& key,
-                          int len, const std::vector<std::string>* fields,
-                          std::vector<std::vector<Field>>& result) {
+                          int len, const std::unordered_set<std::string>* fields,
+                          std::vector<Fields>& result) {
   try {
     // Create key with table prefix
     std::string full_key = key;
@@ -136,14 +136,17 @@ DB::Status LeavesDB::Scan(const std::string& table, const std::string& key,
 
     while (cursor_.is_valid() && count < len) {
       leaves::Slice value_slice = cursor_.value();
+      ReadonlyFields readonly(value_slice.data(), value_slice.size());
 
-      std::vector<Field> values;
+      result.emplace_back();
+      Fields &values = result.back();
+
       if (fields) {
-        serializer_.DeserializeRowFilter(values, value_slice.data(), value_slice.size(), *fields);
+        ReadonlyFields readonly(value_slice.data(), value_slice.size());
+        readonly.filter(values, *fields);
       } else {
-        serializer_.DeserializeRow(values, value_slice.data(), value_slice.size());
+        values = readonly;
       }
-      result.push_back(std::move(values));
 
       cursor_.next();
       count++;
@@ -157,7 +160,7 @@ DB::Status LeavesDB::Scan(const std::string& table, const std::string& key,
 }
 
 DB::Status LeavesDB::Update(const std::string& table, const std::string& key,
-                            std::vector<Field>& values) {
+                            Fields& values) {
   try {
     // Create key with table prefix
     leaves::Slice key_slice(key.data(), key.size());
@@ -169,16 +172,9 @@ DB::Status LeavesDB::Update(const std::string& table, const std::string& key,
     // Read existing value
     leaves::Slice existing_value = cursor_.value();
     
-    // Deserialize current values
-    std::vector<Field> current_values;
-    serializer_.DeserializeRow(current_values, existing_value.data(), existing_value.size());
-    
-    // Merge update fields into current values
-    serializer_.MergeUpdate(current_values, values);
-
-    // Serialize and write back complete record
-    const std::string& data = serializer_.SerializeRow(current_values);
-    leaves::Slice value_slice(data.data(), data.size());
+    ReadonlyFields readonly(existing_value.data(), existing_value.size());
+    Slice updated_data = values.update(readonly);
+    leaves::Slice value_slice(updated_data.data(), updated_data.size());
     cursor_.value(value_slice);
 
     cursor_.commit(sync_);
@@ -190,13 +186,13 @@ DB::Status LeavesDB::Update(const std::string& table, const std::string& key,
 }
 
 DB::Status LeavesDB::Insert(const std::string& table, const std::string& key,
-                            std::vector<Field>& values) {
+                            Fields& values) {
   try {
     // Create key with table prefix
     leaves::Slice key_slice(key.data(), key.size());
     cursor_.find(key_slice);
 
-    const std::string& data = serializer_.SerializeRow(values);
+    const std::string& data = values.buffer();
     leaves::Slice value_slice(data.data(), data.size());
     cursor_.value(value_slice);
 

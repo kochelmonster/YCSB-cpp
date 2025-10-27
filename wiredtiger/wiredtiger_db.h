@@ -25,20 +25,20 @@ class WTDB : public DB {
   void Cleanup();
 
   Status Read(const std::string &table, const std::string &key,
-              const std::vector<std::string> *fields, std::vector<Field> &result) {
+              const std::unordered_set<std::string> *fields, Fields &result) {
     return (this->*(method_read_))(table, key, fields, result);
   }
 
   Status Scan(const std::string &table, const std::string &key, int len,
-              const std::vector<std::string> *fields, std::vector<std::vector<Field>> &result) {
+              const std::unordered_set<std::string> *fields, std::vector<Fields> &result) {
     return (this->*(method_scan_))(table, key, len, fields, result);
   }
 
-  Status Update(const std::string &table, const std::string &key, std::vector<Field> &values) {
+  Status Update(const std::string &table, const std::string &key, Fields &values) {
     return (this->*(method_update_))(table, key, values);
   }
 
-  Status Insert(const std::string &table, const std::string &key, std::vector<Field> &values) {
+  Status Insert(const std::string &table, const std::string &key, Fields &values) {
     return (this->*(method_insert_))(table, key, values);
   }
 
@@ -49,29 +49,29 @@ class WTDB : public DB {
  private:
 
   Status ReadSingleEntry(const std::string &table, const std::string &key,
-                         const std::vector<std::string> *fields, std::vector<Field> &result);
+                         const std::unordered_set<std::string> *fields, Fields &result);
   Status ScanSingleEntry(const std::string &table, const std::string &key, int len,
-                         const std::vector<std::string> *fields,
-                         std::vector<std::vector<Field>> &result);
+                         const std::unordered_set<std::string> *fields,
+                         std::vector<Fields> &result);
   Status UpdateSingleEntry(const std::string &table, const std::string &key,
-                           std::vector<Field> &values);
+                           Fields &values);
   Status InsertSingleEntry(const std::string &table, const std::string &key,
-                           std::vector<Field> &values);
+                           Fields &values);
   Status DeleteSingleEntry(const std::string &table, const std::string &key);
 
-  void SerializeRow(const std::vector<Field> &values, std::string *data);
-  void DeserializeRow(std::vector<Field> *values, const char *data_ptr, size_t data_len);
-  void DeserializeRowFilter(std::vector<Field> *values, const char *data_ptr, size_t data_len, const std::vector<std::string> &fields);
+  void SerializeRow(const Fields &values, std::string *data);
+  void DeserializeRow(Fields *values, const char *data_ptr, size_t data_len);
+  void DeserializeRowFilter(Fields *values, const char *data_ptr, size_t data_len, const std::unordered_set<std::string> &fields);
 
   Status (WTDB::*method_read_)(const std::string &, const std:: string &,
-                                    const std::vector<std::string> *, std::vector<Field> &);
+                                    const std::unordered_set<std::string> *, Fields &);
   Status (WTDB::*method_scan_)(const std::string &, const std::string &, int,
-                                    const std::vector<std::string> *,
-                                    std::vector<std::vector<Field>> &);
+                                    const std::unordered_set<std::string> *,
+                                    std::vector<Fields> &);
   Status (WTDB::*method_update_)(const std::string &, const std::string &,
-                                      std::vector<Field> &);
+                                      Fields &);
   Status (WTDB::*method_insert_)(const std::string &, const std::string &,
-                                      std::vector<Field> &);
+                                      Fields &);
   Status (WTDB::*method_delete_)(const std::string &, const std::string &);
   
   unsigned fieldcount_;

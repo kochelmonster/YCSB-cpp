@@ -205,8 +205,8 @@ void WTDB::Cleanup(){
 }
 
 DB::Status WTDB::ReadSingleEntry(const std::string &table, const std::string &key,
-                                      const std::vector<std::string> *fields,
-                                      std::vector<Field> &result) {
+                                      const std::unordered_set<std::string> *fields,
+                                      Fields &result) {
   WT_ITEM k = {key.data(), key.size()};
   WT_ITEM v;
   int ret;
@@ -227,8 +227,8 @@ DB::Status WTDB::ReadSingleEntry(const std::string &table, const std::string &ke
 }
 
 DB::Status WTDB::ScanSingleEntry(const std::string &table, const std::string &key, int len,
-                                      const std::vector<std::string> *fields,
-                                      std::vector<std::vector<Field>> &result) {
+                                      const std::unordered_set<std::string> *fields,
+                                      std::vector<Fields> &result) {
   WT_ITEM k = {key.data(), key.size()};
   WT_ITEM v;
   int ret = 0, exact;
@@ -240,7 +240,7 @@ DB::Status WTDB::ScanSingleEntry(const std::string &table, const std::string &ke
   }
   for(int i=0; !ret && i<len; ++i){
     error_check(cursor_->get_value(cursor_, &v));
-    result.emplace_back(std::vector<Field>());
+    result.emplace_back();
     if (fields != nullptr) {
       DeserializeRowFilter(&result.back(), (const char*)v.data, v.size, *fields);
     } else {
@@ -251,8 +251,8 @@ DB::Status WTDB::ScanSingleEntry(const std::string &table, const std::string &ke
 }
 
 DB::Status WTDB::UpdateSingleEntry(const std::string &table, const std::string &key,
-                           std::vector<Field> &values){
-  std::vector<Field> current_values;
+                           Fields &values){
+  Fields current_values;
   WT_ITEM k = {key.data(), key.size()};
   WT_ITEM v;
   int ret;
@@ -266,22 +266,10 @@ DB::Status WTDB::UpdateSingleEntry(const std::string &table, const std::string &
   }
   error_check(cursor_->get_value(cursor_, &v));
   DeserializeRow(&current_values, (const char*)v.data, v.size);
-  for (Field &new_field : values) {
-    bool found MAYBE_UNUSED = false;
-    for (Field &cur_field : current_values) {
-      if (cur_field.name == new_field.name) {
-        found = true;
-        cur_field.value = new_field.value;
-        break;
-      }
-    }
-    assert(found);
-  }
+  Slice updated_data = current_values.update(values);
 
-  std::string data;
-  SerializeRow(current_values, &data);
-  v.data = data.data();
-  v.size = data.size();
+  v.data = updated_data.data();
+  v.size = updated_data.size();
   cursor_->set_value(cursor_, &v);
   ret = cursor_->update(cursor_);
   if(ret==WT_NOTFOUND){
@@ -293,7 +281,7 @@ DB::Status WTDB::UpdateSingleEntry(const std::string &table, const std::string &
 }
 
 DB::Status WTDB::InsertSingleEntry(const std::string &table, const std::string &key,
-                           std::vector<Field> &values){
+                           Fields &values){
   std::string data;
   WT_ITEM k = {key.data(), key.size()}, v;
   
@@ -313,53 +301,52 @@ DB::Status WTDB::DeleteSingleEntry(const std::string &table, const std::string &
   return kOK;
 }
 
-void WTDB::SerializeRow(const std::vector<Field> &values, std::string *data) {
-  for (const Field &field : values) {
-    uint32_t len = field.name.size();
+void WTDB::SerializeRow(const Fields &values, std::string *data) {
+  for (auto it = values.begin(); it != values.end(); ++it) {
+    auto [name, value] = *it;
+    uint32_t len = name.size();
     data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t)); // 4B
-    data->append(field.name.data(), field.name.size());             // len(name)
-    len = field.value.size();
+    data->append(name.data(), name.size());                         // len(name)
+    len = value.size();
     data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t)); // 4B
-    data->append(field.value.data(), field.value.size());           // len(value)
+    data->append(value.data(), value.size());                       // len(value)
   }
 }
 
-void WTDB::DeserializeRow(std::vector<Field> *values, const char *data_ptr, size_t data_len) {
+void WTDB::DeserializeRow(Fields *values, const char *data_ptr, size_t data_len) {
   const char *p = data_ptr;
   const char *lim = p + data_len;
   while (p != lim) {
     assert(p < lim);
     uint32_t len = *reinterpret_cast<const uint32_t *>(p);
     p += sizeof(uint32_t);
-    std::string field(p, static_cast<const size_t>(len));
+    const char *field_name = p;
     p += len;
-    len = *reinterpret_cast<const uint32_t *>(p);
+    uint32_t value_len = *reinterpret_cast<const uint32_t *>(p);
     p += sizeof(uint32_t);
-    std::string value(p, static_cast<const size_t>(len));
-    p += len;
-    values->push_back({field, value});
+    const char *field_value = p;
+    p += value_len;
+    values->add(field_name, len, field_value, value_len);
   }
   assert(values->size() == fieldcount_);
 }
 
-void WTDB::DeserializeRowFilter(std::vector<Field> *values, const char *data_ptr, size_t data_len,
-                                  const std::vector<std::string> &fields) {
+void WTDB::DeserializeRowFilter(Fields *values, const char *data_ptr, size_t data_len,
+                                  const std::unordered_set<std::string> &fields) {
   const char *p = data_ptr;
   const char *lim = p + data_len;
-  std::vector<std::string>::const_iterator filter_iter = fields.begin();
-  while (p != lim && filter_iter != fields.end()) {
+  while (p != lim) {
     assert(p < lim);
     uint32_t len = *reinterpret_cast<const uint32_t *>(p);
     p += sizeof(uint32_t);
-    std::string field(p, static_cast<const size_t>(len));
+    const char *field_name = p;
     p += len;
-    len = *reinterpret_cast<const uint32_t *>(p);
+    uint32_t value_len = *reinterpret_cast<const uint32_t *>(p);
     p += sizeof(uint32_t);
-    std::string value(p, static_cast<const size_t>(len));
-    p += len;
-    if (*filter_iter == field) {
-      values->push_back({field, value});
-      filter_iter++;
+    const char *field_value = p;
+    p += value_len;
+    if (fields.find(std::string(field_name, len)) != fields.end()) {
+      values->add(field_name, len, field_value, value_len);
     }
   }
   assert(values->size() == fields.size());
