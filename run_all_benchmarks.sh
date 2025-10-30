@@ -12,8 +12,8 @@ RESULTS_DIR="./benchmark_results"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
 # Databases to test
-DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves")
-WORKLOADS=("workloada" "workloadb" "workloadc" "workloadd" "workloade" "workloadf")
+DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite")
+WORKLOADS=("workloada" "workloadb" "workloadc" "workloadd" "workloadf" "workload_scan" "workload_scan100" "workload_scan10")
 
 # Create results directory
 mkdir -p "$RESULTS_DIR"
@@ -37,6 +37,9 @@ run_benchmark() {
     # Clean up previous database files ONLY before load phase
     if [ "$phase" = "load" ]; then
         case $db in
+            "null")
+                # Null database has no files to clean
+                ;;
             "rocksdb")
                 rm -rf /tmp/ycsb-rocksdb
                 ;;
@@ -52,6 +55,9 @@ run_benchmark() {
             "leaves")
                 rm -rf /tmp/ycsb-leaves
                 ;;
+            "sqlite")
+                rm -f /tmp/ycsb-sqlite.db /tmp/ycsb-sqlite.db-wal /tmp/ycsb-sqlite.db-shm
+                ;;
         esac
     fi
     
@@ -64,6 +70,42 @@ run_benchmark() {
     
     echo "Completed $phase phase for $db with $workload"
     echo "Results saved to: $output_file"
+    
+    # Log database size after each phase
+    if [ "$phase" = "load" ] || [ "$phase" = "run" ]; then
+        local db_path=""
+        case $db in
+            "null")
+                echo "Database size: N/A (null database)" | tee -a "$output_file"
+                ;;
+            "rocksdb")
+                db_path="/tmp/ycsb-rocksdb"
+                ;;
+            "leveldb")
+                db_path="/tmp/ycsb-leveldb"
+                ;;
+            "lmdb")
+                db_path="/tmp/ycsb-lmdb"
+                ;;
+            "wiredtiger")
+                db_path="/tmp/ycsb-wiredtiger"
+                ;;
+            "leaves")
+                db_path="/tmp/ycsb-leaves"
+                ;;
+            "sqlite")
+                db_path="/tmp/ycsb-sqlite.db"
+                ;;
+        esac
+        
+        if [ -n "$db_path" ]; then
+            if [ -e "$db_path" ]; then
+                local db_size=$(du -sh "$db_path" 2>/dev/null | cut -f1)
+                echo "Database size: $db_size" | tee -a "$output_file"
+            fi
+        fi
+    fi
+    
     echo "----------------------------------------"
 }
 
@@ -85,6 +127,7 @@ summarize_results() {
                 echo "--- $workload ---" >> "$summary_file"
                 grep -E "(READ|UPDATE|INSERT|SCAN).*Operations" "$run_file" >> "$summary_file" 2>/dev/null || echo "No operation stats found" >> "$summary_file"
                 grep -E "(READ|UPDATE|INSERT|SCAN).*AverageLatency" "$run_file" >> "$summary_file" 2>/dev/null || echo "No latency stats found" >> "$summary_file"
+                grep "Database size:" "$run_file" >> "$summary_file" 2>/dev/null || true
                 echo "" >> "$summary_file"
             fi
         done

@@ -74,6 +74,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BIND_SQLITE": "ON",
         "BIND_ROCKSDB": "ON",
         "BIND_LMDB": "ON",
         "BIND_LEVELDB": "ON",
