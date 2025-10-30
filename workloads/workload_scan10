@@ -1,0 +1,32 @@
+# YCSB-cpp Realistic Scan Workload with Fixed 10-item Scans
+# Real-world pattern: Find + Scan (e.g., pagination, time-series, feeds)
+#   Application examples: 
+#     - Find user profile, scan their 10 most recent posts
+#     - Find timestamp, scan next 10 log entries  
+#     - Find account, scan 10 recent transactions
+#     - Paginated results with fixed page size of 10
+#                        
+#   Read/scan ratio: 50/50 (realistic: lookup context, then scan range)
+#   Scan length: FIXED at 10 items per scan
+#   Default data size: 1 KB records (10 fields, 100 bytes each, plus key)
+#   Request distribution: zipfian (realistic: some items more popular)
+
+recordcount=100000
+operationcount=100000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+
+readallfields=true
+
+# Realistic mix: half point lookups, half range scans
+readproportion=0.50
+scanproportion=0.50
+updateproportion=0
+insertproportion=0
+
+requestdistribution=zipfian
+
+# Fixed scan length: exactly 10 items (common pagination size)
+minscanlength=10
+maxscanlength=10
+
+scanlengthdistribution=uniform

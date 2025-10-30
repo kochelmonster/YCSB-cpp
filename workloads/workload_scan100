@@ -1,0 +1,32 @@
+# YCSB-cpp Realistic Scan Workload with Fixed 100-item Scans
+# Real-world pattern: Find + Scan (e.g., batch processing, data export)
+#   Application examples: 
+#     - Find starting point, scan 100 records for batch processing
+#     - Find timestamp, scan next 100 log entries for analysis
+#     - Find account, scan all recent transactions (large page)
+#     - Data export with fixed batch size of 100
+#                        
+#   Read/scan ratio: 50/50 (realistic: lookup context, then scan range)
+#   Scan length: FIXED at 100 items per scan
+#   Default data size: 1 KB records (10 fields, 100 bytes each, plus key)
+#   Request distribution: zipfian (realistic: some items more popular)
+
+recordcount=100000
+operationcount=100000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+
+readallfields=true
+
+# Realistic mix: half point lookups, half range scans
+readproportion=0.50
+scanproportion=0.50
+updateproportion=0
+insertproportion=0
+
+requestdistribution=zipfian
+
+# Fixed scan length: exactly 100 items (large batch/export size)
+minscanlength=100
+maxscanlength=100
+
+scanlengthdistribution=uniform
