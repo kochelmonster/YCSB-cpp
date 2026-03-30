@@ -47,6 +47,12 @@ namespace {
 
   const std::string PROP_BLOCK_RESTART_INTERVAL = "leveldb.block_restart_interval";
   const std::string PROP_BLOCK_RESTART_INTERVAL_DEFAULT = "0";
+
+  const std::string PROP_BINARY_KEY = "leveldb.binary_key";
+  const std::string PROP_BINARY_KEY_DEFAULT = "false";
+
+  const std::string PROP_BATCH_SIZE = "leveldb.batch_size";
+  const std::string PROP_BATCH_SIZE_DEFAULT = "1";
 } // anonymous
 
 namespace ycsbc {
@@ -89,6 +95,12 @@ void LeveldbDB::Init() {
   field_prefix_ = props.GetProperty(CoreWorkload::FIELD_NAME_PREFIX,
                                     CoreWorkload::FIELD_NAME_PREFIX_DEFAULT);
 
+  binary_key_ = props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
+  batch_size_ = std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
+  if (batch_size_ < 1) batch_size_ = 1;
+  pending_ = 0;
+  write_batch_.Clear();
+
   ref_cnt_++;
   if (db_) {
     return;
@@ -119,6 +131,7 @@ void LeveldbDB::Init() {
 
 void LeveldbDB::Cleanup() {
   const std::lock_guard<std::mutex> lock(mu_);
+  FlushBatch();
   if (--ref_cnt_) {
     return;
   }
@@ -198,8 +211,10 @@ std::string LeveldbDB::FieldFromCompKey(const std::string &comp_key) {
 DB::Status LeveldbDB::ReadSingleEntry(const std::string &table, const std::string &key,
                                       const std::unordered_set<std::string> *fields,
                                       Fields &result) {
+  FlushBatch();
+  std::string encoded = EncodeKey(key);
   std::string data;
-  leveldb::Status s = db_->Get(leveldb::ReadOptions(), key, &data);
+  leveldb::Status s = db_->Get(leveldb::ReadOptions(), encoded, &data);
   if (s.IsNotFound()) {
     return kNotFound;
   } else if (!s.ok()) {
@@ -217,8 +232,10 @@ DB::Status LeveldbDB::ReadSingleEntry(const std::string &table, const std::strin
 DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, const std::string &key, int len,
                                       const std::unordered_set<std::string> *fields,
                                       std::vector<Fields> &result) {
+  FlushBatch();
+  std::string encoded = EncodeKey(key);
   leveldb::Iterator *db_iter = db_->NewIterator(leveldb::ReadOptions());
-  db_iter->Seek(key);
+  db_iter->Seek(encoded);
   for (int i = 0; db_iter->Valid() && i < len; i++) {
     std::string data = db_iter->value().ToString();
     result.emplace_back();
@@ -237,8 +254,10 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, const std::strin
 
 DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, const std::string &key,
                                         Fields &values) {
+  FlushBatch();
+  std::string encoded = EncodeKey(key);
   std::string data;
-  leveldb::Status s = db_->Get(leveldb::ReadOptions(), key, &data);
+  leveldb::Status s = db_->Get(leveldb::ReadOptions(), encoded, &data);
   if (s.IsNotFound()) {
     return kNotFound;
   } else if (!s.ok()) {
@@ -249,32 +268,24 @@ DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, const std::str
   current_values = readonly;
   
   Slice updated_data = current_values.update(values);
-  leveldb::WriteOptions wopt;
-
-  s = db_->Put(wopt, key, leveldb::Slice(updated_data.data(), updated_data.size()));
-  if (!s.ok()) {
-    throw utils::Exception(std::string("LevelDB Put: ") + s.ToString());
-  }
+  write_batch_.Put(encoded, leveldb::Slice(updated_data.data(), updated_data.size()));
+  CommitMutation();
   return kOK;
 }
 
 DB::Status LeveldbDB::InsertSingleEntry(const std::string &table, const std::string &key,
                                         Fields &values) {
+  std::string encoded = EncodeKey(key);
   const std::string& data = values.buffer();
-  leveldb::WriteOptions wopt;
-  leveldb::Status s = db_->Put(wopt, key, data);
-  if (!s.ok()) {
-    throw utils::Exception(std::string("LevelDB Put: ") + s.ToString());
-  }
+  write_batch_.Put(encoded, data);
+  CommitMutation();
   return kOK;
 }
 
 DB::Status LeveldbDB::DeleteSingleEntry(const std::string &table, const std::string &key) {
-  leveldb::WriteOptions wopt;
-  leveldb::Status s = db_->Delete(wopt, key);
-  if (!s.ok()) {
-    throw utils::Exception(std::string("LevelDB Delete: ") + s.ToString());
-  }
+  std::string encoded = EncodeKey(key);
+  write_batch_.Delete(encoded);
+  CommitMutation();
   return kOK;
 }
 

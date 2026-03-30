@@ -11,21 +11,26 @@
 #include <iostream>
 #include <string>
 #include <mutex>
+#include <cstdlib>
+#include <cstring>
+#include <endian.h>
 
 #include "core/db.h"
 #include "utils/properties.h"
+#include "utils/utils.h"
 
 #include <leveldb/db.h>
 #include <leveldb/options.h>
 #include <leveldb/status.h>
 #include <leveldb/cache.h>
 #include <leveldb/filter_policy.h>
+#include <leveldb/write_batch.h>
 
 namespace ycsbc {
 
 class LeveldbDB : public DB {
  public:
-  LeveldbDB() {}
+  LeveldbDB() : binary_key_(false), batch_size_(1), pending_(0) {}
   ~LeveldbDB() {}
 
   void Init();
@@ -105,6 +110,31 @@ class LeveldbDB : public DB {
 
   int fieldcount_;
   std::string field_prefix_;
+
+  bool binary_key_;
+  int batch_size_;
+  int pending_;
+  leveldb::WriteBatch write_batch_;
+
+  std::string EncodeKey(const std::string &key) {
+    if (!binary_key_) return key;
+    uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
+    uint64_t be = htobe64(n);
+    std::string result(8, '\0');
+    std::memcpy(result.data(), &be, 8);
+    return result;
+  }
+  void FlushBatch() {
+    if (pending_ > 0) {
+      leveldb::Status s = db_->Write(leveldb::WriteOptions(), &write_batch_);
+      if (!s.ok()) throw utils::Exception(std::string("LevelDB Write: ") + s.ToString());
+      write_batch_.Clear();
+      pending_ = 0;
+    }
+  }
+  void CommitMutation() {
+    if (++pending_ >= batch_size_) FlushBatch();
+  }
 
   static leveldb::DB *db_;
   static int ref_cnt_;
