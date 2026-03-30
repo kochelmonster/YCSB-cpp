@@ -11,6 +11,7 @@
 #include <string>
 #include <mutex>
 #include <memory>
+#include <endian.h>
 
 #include "core/db.h"
 #include "utils/properties.h"
@@ -22,7 +23,7 @@ namespace ycsbc {
 
 class LeavesDB : public DB {
  public:
-  LeavesDB() : fieldcount_(0) {}
+  LeavesDB() : fieldcount_(0), binary_key_(false), batch_size_(1), pending_(0) {}
   ~LeavesDB() {}
 
   void Init();
@@ -48,7 +49,7 @@ class LeavesDB : public DB {
   LeavesFormat format_;
 
   // Database instance management
-  static std::unique_ptr<leaves::MapStorage> storage_;
+  static std::shared_ptr<leaves::MapStorage> storage_;
   static int ref_cnt_;
   static std::mutex mu_;
   
@@ -57,6 +58,40 @@ class LeavesDB : public DB {
   size_t mapsize_;
   leaves::MapStorage::DB::Cursor cursor_;
   bool sync_;
+  bool binary_key_;
+  int batch_size_;
+  int pending_;
+  char key_buf_[8];
+
+  // Encode a YCSB key ("user" + decimal) into a leaves Slice.
+  // Binary mode: strip "user" prefix, parse uint64, store as 8-byte big-endian.
+  // ASCII mode:  use the raw string as-is.
+  leaves::Slice EncodeKey(const std::string &key) {
+    if (!binary_key_) {
+      return leaves::Slice(key.data(), key.size());
+    }
+    // Skip the "user" prefix (4 bytes)
+    uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
+    uint64_t be = htobe64(n);
+    std::memcpy(key_buf_, &be, 8);
+    return leaves::Slice(key_buf_, 8);
+  }
+
+  // Commit pending mutations if any.
+  void FlushPending() {
+    if (pending_ > 0) {
+      cursor_.commit(sync_);
+      pending_ = 0;
+    }
+  }
+
+  // Record one mutation; commit when batch is full.
+  void CommitMutation() {
+    if (++pending_ >= batch_size_) {
+      cursor_.commit(sync_);
+      pending_ = 0;
+    }
+  }
 };
 
 DB *NewLeavesDB();

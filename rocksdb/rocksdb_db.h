@@ -10,18 +10,23 @@
 
 #include <string>
 #include <mutex>
+#include <cstdlib>
+#include <cstring>
+#include <endian.h>
 
 #include "core/db.h"
 #include "utils/properties.h"
+#include "utils/utils.h"
 
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
+#include <rocksdb/write_batch.h>
 
 namespace ycsbc {
 
 class RocksdbDB : public DB {
  public:
-  RocksdbDB() {}
+  RocksdbDB() : binary_key_(false), batch_size_(1), pending_(0) {}
   ~RocksdbDB() {}
 
   void Init();
@@ -84,6 +89,31 @@ class RocksdbDB : public DB {
   Status (RocksdbDB::*method_delete_)(const std::string &, const std::string &);
 
   int fieldcount_;
+
+  bool binary_key_;
+  int batch_size_;
+  int pending_;
+  rocksdb::WriteBatch write_batch_;
+
+  std::string EncodeKey(const std::string &key) {
+    if (!binary_key_) return key;
+    uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
+    uint64_t be = htobe64(n);
+    std::string result(8, '\0');
+    std::memcpy(result.data(), &be, 8);
+    return result;
+  }
+  void FlushBatch() {
+    if (pending_ > 0) {
+      rocksdb::Status s = db_->Write(wopt_, &write_batch_);
+      if (!s.ok()) throw utils::Exception(std::string("RocksDB Write: ") + s.ToString());
+      write_batch_.Clear();
+      pending_ = 0;
+    }
+  }
+  void CommitMutation() {
+    if (++pending_ >= batch_size_) FlushBatch();
+  }
 
   static std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   static rocksdb::DB *db_;

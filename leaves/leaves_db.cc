@@ -12,6 +12,7 @@
 #include <cstring>
 #include <iostream>
 #include <sstream>
+#include <cstdlib>
 
 #include "core/core_workload.h"
 #include "core/db_factory.h"
@@ -31,11 +32,17 @@ const std::string PROP_DESTROY_DEFAULT = "false";
 
 const std::string PROP_SYNC = "leaves.sync";
 const std::string PROP_SYNC_DEFAULT = "false";
+
+const std::string PROP_BINARY_KEY = "leaves.binary_key";
+const std::string PROP_BINARY_KEY_DEFAULT = "false";
+
+const std::string PROP_BATCH_SIZE = "leaves.batch_size";
+const std::string PROP_BATCH_SIZE_DEFAULT = "1";
 }  // namespace
 
 namespace ycsbc {
 
-std::unique_ptr<leaves::MapStorage> LeavesDB::storage_(nullptr);
+std::shared_ptr<leaves::MapStorage> LeavesDB::storage_(nullptr);
 int LeavesDB::ref_cnt_(0);
 std::mutex LeavesDB::mu_;
 
@@ -50,6 +57,10 @@ void LeavesDB::Init() {
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
 
   sync_ = props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true";
+  binary_key_ = props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
+  batch_size_ = std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
+  if (batch_size_ < 1) batch_size_ = 1;
+  pending_ = 0;
 
   format_ = kSingleRow;
   const std::string& format =
@@ -71,7 +82,7 @@ void LeavesDB::Init() {
     // First instance initializes the storage
     try {
       storage_ =
-          std::make_unique<leaves::MapStorage>(dbpath_.c_str(), mapsize_);
+          std::make_shared<leaves::MapStorage>(dbpath_.c_str(), mapsize_);
       std::cout << "Leaves database initialized: " << dbpath_ << std::endl;
     } catch (const std::exception& e) {
       std::cerr << "Failed to initialize Leaves database: " << e.what()
@@ -84,6 +95,7 @@ void LeavesDB::Init() {
 }
 
 void LeavesDB::Cleanup() {
+  FlushPending();
   const std::lock_guard<std::mutex> lock(mu_);
   ref_cnt_--;
   if (ref_cnt_ == 0) {
@@ -96,8 +108,8 @@ DB::Status LeavesDB::Read(const std::string& table, const std::string& key,
                           const std::unordered_set<std::string>* fields,
                           Fields& result) {
   try {
-    // Create key with table prefix
-    leaves::Slice key_slice(key.data(), key.size());
+    FlushPending();
+    leaves::Slice key_slice = EncodeKey(key);
 
     cursor_.find(key_slice);
 
@@ -125,9 +137,8 @@ DB::Status LeavesDB::Scan(const std::string& table, const std::string& key,
                           int len, const std::unordered_set<std::string>* fields,
                           std::vector<Fields>& result) {
   try {
-    // Create key with table prefix
-    std::string full_key = key;
-    leaves::Slice key_slice(full_key.data(), full_key.size());
+    FlushPending();
+    leaves::Slice key_slice = EncodeKey(key);
 
     cursor_.find(key_slice);
 
@@ -162,8 +173,7 @@ DB::Status LeavesDB::Scan(const std::string& table, const std::string& key,
 DB::Status LeavesDB::Update(const std::string& table, const std::string& key,
                             Fields& values) {
   try {
-    // Create key with table prefix
-    leaves::Slice key_slice(key.data(), key.size());
+    leaves::Slice key_slice = EncodeKey(key);
     cursor_.find(key_slice);
     if (!cursor_.is_valid()) {
       return kNotFound;
@@ -177,7 +187,7 @@ DB::Status LeavesDB::Update(const std::string& table, const std::string& key,
     leaves::Slice value_slice(updated_data.data(), updated_data.size());
     cursor_.value(value_slice);
 
-    cursor_.commit(sync_);
+    CommitMutation();
     return kOK;
   } catch (const std::exception& e) {
     std::cerr << "Leaves Update error: " << e.what() << std::endl;
@@ -188,15 +198,14 @@ DB::Status LeavesDB::Update(const std::string& table, const std::string& key,
 DB::Status LeavesDB::Insert(const std::string& table, const std::string& key,
                             Fields& values) {
   try {
-    // Create key with table prefix
-    leaves::Slice key_slice(key.data(), key.size());
+    leaves::Slice key_slice = EncodeKey(key);
     cursor_.find(key_slice);
 
     const std::string& data = values.buffer();
     leaves::Slice value_slice(data.data(), data.size());
     cursor_.value(value_slice);
 
-    cursor_.commit(sync_);
+    CommitMutation();
     return kOK;
   } catch (const std::exception& e) {
     std::cerr << "Leaves Insert error: " << e.what() << std::endl;
@@ -206,8 +215,7 @@ DB::Status LeavesDB::Insert(const std::string& table, const std::string& key,
 
 DB::Status LeavesDB::Delete(const std::string& table, const std::string& key) {
   try {
-    // Create key with table prefix
-    leaves::Slice key_slice(key.data(), key.size());
+    leaves::Slice key_slice = EncodeKey(key);
 
     cursor_.find(key_slice);
 
@@ -216,7 +224,7 @@ DB::Status LeavesDB::Delete(const std::string& table, const std::string& key) {
     }
 
     cursor_.remove();
-    cursor_.commit(sync_);
+    CommitMutation();
     return kOK;
   } catch (const std::exception& e) {
     std::cerr << "Leaves Delete error: " << e.what() << std::endl;

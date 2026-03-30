@@ -42,6 +42,12 @@ namespace {
 
   const std::string PROP_MAPASYNC = "lmdb.mapasync";
   const std::string PROP_MAPASYNC_DEFAULT = "false";
+
+  const std::string PROP_BINARY_KEY = "lmdb.binary_key";
+  const std::string PROP_BINARY_KEY_DEFAULT = "false";
+
+  const std::string PROP_BATCH_SIZE = "lmdb.batch_size";
+  const std::string PROP_BATCH_SIZE_DEFAULT = "1";
 } // anonymous
 
 namespace ycsbc {
@@ -55,9 +61,15 @@ int LmdbDB::ref_cnt_ = 0;
 std::mutex LmdbDB::mutex_;
 
 void LmdbDB::Init() {
-  const std::lock_guard<std::mutex> lock(mutex_);
-
   const utils::Properties &props = *props_;
+
+  binary_key_ = props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
+  batch_size_ = std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
+  if (batch_size_ < 1) batch_size_ = 1;
+  pending_ = 0;
+  write_txn_ = nullptr;
+
+  const std::lock_guard<std::mutex> lock(mutex_);
 
   if (ref_cnt_++) {
     return;
@@ -125,6 +137,7 @@ void LmdbDB::Init() {
 }
 
 void LmdbDB::Cleanup() {
+  FlushBatch();
   const std::lock_guard<std::mutex> lock(mutex_);
   if (--ref_cnt_) {
     return;
@@ -136,11 +149,10 @@ void LmdbDB::Cleanup() {
 DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const std::unordered_set<std::string> *fields,
                         Fields &result) {
   DB::Status s = kOK;
+  FlushBatch();
   MDB_txn *txn;
-  MDB_val key_slice, val_slice;
-
-  key_slice.mv_data = static_cast<void *>(const_cast<char *>(key.data()));
-  key_slice.mv_size = key.size();
+  MDB_val key_slice = EncodeKey(key);
+  MDB_val val_slice;
 
   int ret;
   // Use MDB_RDONLY | MDB_NOTLS for fast lock-free reads
@@ -173,12 +185,11 @@ DB::Status LmdbDB::Scan(const std::string &table, const std::string &key, int le
                         const std::unordered_set<std::string> *fields,
                         std::vector<Fields> &result) {
   DB::Status s = kOK;
+  FlushBatch();
   MDB_txn *txn;
   MDB_cursor *cursor;
-  MDB_val key_slice, val_slice;
-
-  key_slice.mv_data = static_cast<void *>(const_cast<char *>(key.data()));
-  key_slice.mv_size = key.size();
+  MDB_val key_slice = EncodeKey(key);
+  MDB_val val_slice;
 
   int ret;
   ret = mdb_txn_begin(env_, nullptr, 0, &txn);
@@ -215,18 +226,15 @@ cleanup:
 }
 
 DB::Status LmdbDB::Update(const std::string &table, const std::string &key, Fields &values) {
-  MDB_txn *txn;
-  MDB_val key_slice, val_slice;
+  FlushBatch();
+  MDB_val key_slice = EncodeKey(key);
+  MDB_val val_slice;
 
-  key_slice.mv_data = static_cast<void *>(const_cast<char *>(key.data()));
-  key_slice.mv_size = key.size();
-
-  int ret;
-  ret = mdb_txn_begin(env_, nullptr, 0, &txn);
-  if (ret) {
-    throw utils::Exception(std::string("Update mdb_txn_begin: ") + mdb_strerror(ret));
+  if (!write_txn_) {
+    int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
+    if (ret) throw utils::Exception(std::string("Update mdb_txn_begin: ") + mdb_strerror(ret));
   }
-  ret = mdb_get(txn, dbi_, &key_slice, &val_slice);
+  int ret = mdb_get(write_txn_, dbi_, &key_slice, &val_slice);
   if (ret) {
     throw utils::Exception(std::string("Update mdb_get: ") + mdb_strerror(ret));
   }
@@ -238,65 +246,41 @@ DB::Status LmdbDB::Update(const std::string &table, const std::string &key, Fiel
 
   val_slice.mv_data = const_cast<char *>(updated_data.data());
   val_slice.mv_size = updated_data.size();
-  ret = mdb_put(txn, dbi_, &key_slice, &val_slice, 0);
+  ret = mdb_put(write_txn_, dbi_, &key_slice, &val_slice, 0);
   if (ret) {
     throw utils::Exception(std::string("Update mdb_put: ") + mdb_strerror(ret));
   }
-
-  ret = mdb_txn_commit(txn);
-  if (ret) {
-    throw utils::Exception(std::string("Update mdb_txn_commit: ") + mdb_strerror(ret));
-  }
+  CommitMutation();
   return kOK;
 }
 
 DB::Status LmdbDB::Insert(const std::string &table, const std::string &key, Fields &values) {
-  MDB_txn *txn;
-  MDB_val key_slice, val_slice;
-
-  key_slice.mv_data = static_cast<void *>(const_cast<char *>(key.data()));
-  key_slice.mv_size = key.size();
-
+  MDB_val key_slice = EncodeKey(key);
   const std::string& data = values.buffer();
+  MDB_val val_slice;
   val_slice.mv_data = static_cast<void *>(const_cast<char *>(data.data()));
   val_slice.mv_size = data.size();
 
-  int ret;
-  ret = mdb_txn_begin(env_, nullptr, 0, &txn);
-  if (ret) {
-    throw utils::Exception(std::string("Insert mdb_txn_begin: ") + mdb_strerror(ret));
+  if (!write_txn_) {
+    int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
+    if (ret) throw utils::Exception(std::string("Insert mdb_txn_begin: ") + mdb_strerror(ret));
   }
-  ret = mdb_put(txn, dbi_, &key_slice, &val_slice, 0);
-  if (ret) {
-    throw utils::Exception(std::string("Insert mdb_put: ") + mdb_strerror(ret));
-  }
-  ret = mdb_txn_commit(txn);
-  if (ret) {
-    throw utils::Exception(std::string("Insert mdb_txn_commit: ") + mdb_strerror(ret));
-  }
+  int ret = mdb_put(write_txn_, dbi_, &key_slice, &val_slice, 0);
+  if (ret) throw utils::Exception(std::string("Insert mdb_put: ") + mdb_strerror(ret));
+  CommitMutation();
   return kOK;
 }
 
 DB::Status LmdbDB::Delete(const std::string &table, const std::string &key) {
-  MDB_txn *txn;
-  MDB_val key_slice;
+  MDB_val key_slice = EncodeKey(key);
 
-  key_slice.mv_data = static_cast<void *>(const_cast<char *>(key.data()));
-  key_slice.mv_size = key.size();
-
-  int ret;
-  ret = mdb_txn_begin(env_, nullptr, 0, &txn);
-  if (ret) {
-    throw utils::Exception(std::string("Delete mdb_txn_begin: ") + mdb_strerror(ret));
+  if (!write_txn_) {
+    int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
+    if (ret) throw utils::Exception(std::string("Delete mdb_txn_begin: ") + mdb_strerror(ret));
   }
-  ret = mdb_del(txn, dbi_, &key_slice, nullptr);
-  if (ret) {
-    throw utils::Exception(std::string("Delete mdb_del: ") + mdb_strerror(ret));
-  }
-  ret = mdb_txn_commit(txn);
-  if (ret) {
-    throw utils::Exception(std::string("Delete mdb_txn_commit: ") + mdb_strerror(ret));
-  }
+  int ret = mdb_del(write_txn_, dbi_, &key_slice, nullptr);
+  if (ret) throw utils::Exception(std::string("Delete mdb_del: ") + mdb_strerror(ret));
+  CommitMutation();
   return kOK;
 }
 
