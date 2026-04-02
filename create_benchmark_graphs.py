@@ -31,13 +31,14 @@ WORKLOAD_LABELS = {
 
 ACID_WORKLOAD_LABELS = {"ACID A/C/I", "ACID Txn"}
 
-DATABASE_ORDER = ["leaves", "lmdb", "leveldb", "rocksdb", "wiredtiger", "redis"]
+DATABASE_ORDER = ["leaves", "lmdb", "leveldb", "rocksdb", "wiredtiger", "sqlite", "redis"]
 COLORS = {
     "leaves": "#15616d",
     "lmdb": "#2a9d8f",
     "leveldb": "#e9c46a",
     "rocksdb": "#f4a261",
     "wiredtiger": "#e76f51",
+    "sqlite": "#5c7cfa",
     "redis": "#8d99ae",
 }
 
