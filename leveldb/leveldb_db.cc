@@ -24,6 +24,9 @@ namespace {
   const std::string PROP_DESTROY = "leveldb.destroy";
   const std::string PROP_DESTROY_DEFAULT = "false";
 
+  const std::string PROP_SYNC = "leveldb.sync";
+  const std::string PROP_SYNC_DEFAULT = "false";
+
   const std::string PROP_COMPRESSION = "leveldb.compression";
   const std::string PROP_COMPRESSION_DEFAULT = "no";
 
@@ -96,6 +99,7 @@ void LeveldbDB::Init() {
                                     CoreWorkload::FIELD_NAME_PREFIX_DEFAULT);
 
   binary_key_ = props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
+  sync_ = props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true";
   batch_size_ = std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
   if (batch_size_ < 1) batch_size_ = 1;
   pending_ = 0;
@@ -386,6 +390,7 @@ DB::Status LeveldbDB::ScanCompKeyCM(const std::string &table, const std::string 
 DB::Status LeveldbDB::InsertCompKey(const std::string &table, const std::string &key,
                                     Fields &values) {
   leveldb::WriteOptions wopt;
+  wopt.sync = sync_;
   leveldb::WriteBatch batch;
 
   std::string comp_key;
@@ -404,6 +409,7 @@ DB::Status LeveldbDB::InsertCompKey(const std::string &table, const std::string 
 
 DB::Status LeveldbDB::DeleteCompKey(const std::string &table, const std::string &key) {
   leveldb::WriteOptions wopt;
+  wopt.sync = sync_;
   leveldb::WriteBatch batch;
 
   std::string comp_key;

@@ -146,15 +146,60 @@ void LmdbDB::Cleanup() {
   mdb_env_close(env_);
 }
 
+DB::Status LmdbDB::BeginTransaction() {
+  if (txn_active_) return kError;
+  FlushBatch();
+  if (!write_txn_) {
+    int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
+    if (ret) throw utils::Exception(std::string("BeginTransaction mdb_txn_begin: ") + mdb_strerror(ret));
+  }
+  pending_ = 0;
+  txn_active_ = true;
+  return kOK;
+}
+
+DB::Status LmdbDB::CommitTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  int ret = mdb_txn_commit(write_txn_);
+  write_txn_ = nullptr;
+  pending_ = 0;
+  if (ret) throw utils::Exception(std::string("CommitTransaction mdb_txn_commit: ") + mdb_strerror(ret));
+  return kOK;
+}
+
+DB::Status LmdbDB::RollbackTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  mdb_txn_abort(write_txn_);
+  write_txn_ = nullptr;
+  pending_ = 0;
+  return kOK;
+}
+
 DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const std::unordered_set<std::string> *fields,
                         Fields &result) {
   DB::Status s = kOK;
-  FlushBatch();
-  MDB_txn *txn;
   MDB_val key_slice = EncodeKey(key);
   MDB_val val_slice;
-
   int ret;
+
+  if (txn_active_) {
+    ret = mdb_get(write_txn_, dbi_, &key_slice, &val_slice);
+    if (ret == MDB_NOTFOUND) return kNotFound;
+    if (ret) throw utils::Exception(std::string("Read mdb_get: ") + mdb_strerror(ret));
+    if (fields != nullptr) {
+      ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+      readonly.filter(result, *fields);
+    } else {
+      ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+      result = readonly;
+    }
+    return kOK;
+  }
+
+  FlushBatch();
+  MDB_txn *txn;
   // Use MDB_RDONLY | MDB_NOTLS for fast lock-free reads
   ret = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
   if (ret) {

@@ -1,0 +1,22 @@
+# YCSB-cpp Application Workload: Read-Only Lookup / Feature Serving
+# Real-world pattern:
+#   - Feature store lookups
+#   - Precomputed profile serving
+#   - Read-mostly analytic serving tier
+#
+# Read/update ratio: 100/0
+# Request distribution: zipfian
+
+recordcount=100000
+operationcount=100000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+
+readallfields=true
+
+readproportion=1.0
+updateproportion=0
+scanproportion=0
+insertproportion=0
+readmodifywriteproportion=0
+
+requestdistribution=zipfian

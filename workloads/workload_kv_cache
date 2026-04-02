@@ -1,0 +1,22 @@
+# YCSB-cpp Application Workload: Cache / Metadata Lookup Service
+# Real-world pattern:
+#   - Profile lookups
+#   - Metadata serving
+#   - Hot-key cache backed by persistent storage
+#
+# Read/update ratio: 95/5
+# Request distribution: zipfian
+
+recordcount=100000
+operationcount=100000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+
+readallfields=true
+
+readproportion=0.95
+updateproportion=0.05
+scanproportion=0
+insertproportion=0
+readmodifywriteproportion=0
+
+requestdistribution=zipfian

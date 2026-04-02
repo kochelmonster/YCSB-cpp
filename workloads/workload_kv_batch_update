@@ -1,0 +1,31 @@
+# YCSB-cpp Application Workload: Batch Update Stress
+# Real-world pattern:
+#   - Stateful session/profile mutation
+#   - Counter and metadata refresh flows
+#
+# Update/read ratio: 80/20
+# Request distribution: zipfian
+
+recordcount=100000
+operationcount=100000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+
+readallfields=true
+
+readproportion=0.20
+updateproportion=0.80
+scanproportion=0
+insertproportion=0
+readmodifywriteproportion=0
+
+requestdistribution=zipfian
+
+# Default batching and binary keys for maximum throughput
+leaves.batch_size=64
+lmdb.batch_size=64
+leveldb.batch_size=64
+rocksdb.batch_size=64
+leaves.binary_key=true
+lmdb.binary_key=true
+leveldb.binary_key=true
+rocksdb.binary_key=true

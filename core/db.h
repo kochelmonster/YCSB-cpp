@@ -43,6 +43,18 @@ class DB {
   ///
   virtual void Cleanup() { }
   ///
+  /// Begins an explicit transaction if supported.
+  ///
+  virtual Status BeginTransaction() { return kNotImplemented; }
+  ///
+  /// Commits an explicit transaction if supported.
+  ///
+  virtual Status CommitTransaction() { return kNotImplemented; }
+  ///
+  /// Rolls back an explicit transaction if supported.
+  ///
+  virtual Status RollbackTransaction() { return kNotImplemented; }
+  ///
   /// Reads a record from the database.
   /// Field/value pairs from the result are stored in a Fields object.
   ///

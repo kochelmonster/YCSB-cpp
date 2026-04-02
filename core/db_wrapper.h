@@ -30,6 +30,15 @@ class DBWrapper : public DB {
   void Cleanup() {
     db_->Cleanup();
   }
+  Status BeginTransaction() {
+    return db_->BeginTransaction();
+  }
+  Status CommitTransaction() {
+    return db_->CommitTransaction();
+  }
+  Status RollbackTransaction() {
+    return db_->RollbackTransaction();
+  }
   Status Read(const std::string &table, const std::string &key,
               const std::unordered_set<std::string> *fields, Fields &result) {
     timer_.Start();

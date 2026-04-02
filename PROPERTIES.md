@@ -84,6 +84,7 @@ LevelDB properties are prefixed with `leveldb.`. Example configuration file: `le
 |----------|---------|-------------|
 | `leveldb.dbname` | - | Database path |
 | `leveldb.destroy` | `false` | Destroy database on startup |
+| `leveldb.sync` | `false` | Use synchronous writes for every committed write batch |
 | `leveldb.write_buffer_size` | `0` | Write buffer size, set to 0 for leveldb default |
 | `leveldb.max_file_size` | `0` | Maximum file size, set to 0 for leveldb default |
 | `leveldb.max_open_files` | `0` | Maximum open files, set to 0 for leveldb default |
@@ -92,6 +93,8 @@ LevelDB properties are prefixed with `leveldb.`. Example configuration file: `le
 | `leveldb.filter_bits` | `0` | Bloom filter bits per key, 0 = disabled |
 | `leveldb.block_size` | `0` | Block size, set to 0 for leveldb default |
 | `leveldb.block_restart_interval` | `0` | Block restart interval, set to 0 for leveldb default |
+| `leveldb.binary_key` | `false` | Encode keys as 8-byte big-endian integers instead of ASCII YCSB keys |
+| `leveldb.batch_size` | `1` | Number of pending mutations to batch before writing |
 
 ### RocksDB Properties
 
@@ -105,6 +108,8 @@ RocksDB properties are prefixed with `rocksdb.`. Example configuration file: `ro
 | `rocksdb.destroy` | `false` | Destroy database on startup |
 | `rocksdb.mergeupdate` | `false` | Use merge operator for updates, ycsb should be compiled with `-DUSE_MERGEUPDATE` |
 | `rocksdb.sync` | `false` | Set [`WriteOptions.sync`](https://github.com/facebook/rocksdb/wiki/WAL-Performance#sync-mode) for every writes |
+| `rocksdb.binary_key` | `false` | Encode keys as 8-byte big-endian integers instead of ASCII YCSB keys |
+| `rocksdb.batch_size` | `1` | Number of pending mutations to batch before writing |
 | `rocksdb.optionsfile` | - | Path to RocksDB options file, if specified, properties below will be ignored |
 
 #### Performance Tuning
@@ -166,6 +171,8 @@ LMDB properties are prefixed with `lmdb.`. Example configuration file: `lmdb/lmd
 | `lmdb.noreadahead` | `false` | Disable read-ahead |
 | `lmdb.writemap` | `false` | Use writable memory map |
 | `lmdb.mapasync` | `false` | Use asynchronous msync |
+| `lmdb.binary_key` | `false` | Encode keys as 8-byte big-endian integers instead of ASCII YCSB keys |
+| `lmdb.batch_size` | `1` | Number of pending mutations to batch before commit |
 
 ### WiredTiger Properties
 
@@ -206,6 +213,20 @@ WiredTiger properties are prefixed with `wiredtiger.`. Example configuration fil
 | `wiredtiger.blk_mgr.btree.leaf_key_max` | `0` | Maximum leaf key size (0 = auto) |
 | `wiredtiger.blk_mgr.btree.leaf_value_max` | `0` | Maximum leaf value size (0 = auto) |
 | `wiredtiger.blk_mgr.btree.leaf_page_max` | `32KB` | Maximum leaf page size |
+
+### Leaves Properties
+
+Leaves properties are prefixed with `leaves.`. Example configuration file: `leaves/leaves.properties`.
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `leaves.dbpath` | `/tmp/ycsb-leaves` | Database path |
+| `leaves.mapsize` | `1073741824` | Mapped address space size |
+| `leaves.format` | `single` | Row format to use |
+| `leaves.destroy` | `false` | Destroy database on startup |
+| `leaves.sync` | `false` | Force synchronous commits |
+| `leaves.binary_key` | `false` | Encode keys as 8-byte big-endian integers instead of ASCII YCSB keys |
+| `leaves.batch_size` | `1` | Number of pending mutations to batch before commit |
 
 ### SQLite Properties
 

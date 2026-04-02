@@ -1,0 +1,21 @@
+# YCSB-cpp Application Workload: ACID-Oriented A/C/I Mix (API-compatible)
+# This workload approximates atomicity/consistency/isolation pressure
+# using read + update + read-modify-write under strict durability mode.
+#
+# Read/update/RMW ratio: 25/35/40
+# Request distribution: zipfian
+
+recordcount=100000
+operationcount=100000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+
+readallfields=true
+writeallfields=true
+
+readproportion=0.25
+updateproportion=0.35
+scanproportion=0
+insertproportion=0
+readmodifywriteproportion=0.40
+
+requestdistribution=zipfian

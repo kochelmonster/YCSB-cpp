@@ -23,7 +23,7 @@ namespace ycsbc {
 
 class LmdbDB : public DB {
  public:
-  LmdbDB() : binary_key_(false), batch_size_(1), pending_(0), write_txn_(nullptr) {}
+  LmdbDB() : binary_key_(false), batch_size_(1), pending_(0), write_txn_(nullptr), txn_active_(false) {}
   ~LmdbDB() {}
 
   void Init();
@@ -42,11 +42,16 @@ class LmdbDB : public DB {
 
   Status Delete(const std::string &table, const std::string &key);
 
+  Status BeginTransaction();
+  Status CommitTransaction();
+  Status RollbackTransaction();
+
  private:
   bool binary_key_;
   int batch_size_;
   int pending_;
   MDB_txn *write_txn_;
+  bool txn_active_;
   char key_buf_[8];
 
   MDB_val EncodeKey(const std::string &key) {
@@ -64,6 +69,7 @@ class LmdbDB : public DB {
     return k;
   }
   void FlushBatch() {
+    if (txn_active_) return;
     if (pending_ > 0 && write_txn_ != nullptr) {
       int ret = mdb_txn_commit(write_txn_);
       write_txn_ = nullptr;
@@ -72,6 +78,7 @@ class LmdbDB : public DB {
     }
   }
   void CommitMutation() {
+    if (txn_active_) return;
     if (++pending_ >= batch_size_) FlushBatch();
   }
 

@@ -170,6 +170,9 @@ class CoreWorkload {
   ///
   static const std::string ZIPFIAN_CONST_PROPERTY;
 
+  static const std::string TRANSACTION_MODE_PROPERTY;
+  static const std::string TRANSACTION_MODE_DEFAULT;
+
   ///
   /// Initialize the scenario.
   /// Called once, in the main client thread, before any operations are started.
@@ -186,7 +189,8 @@ class CoreWorkload {
       field_count_(0), read_all_fields_(false), write_all_fields_(false),
       field_len_generator_(nullptr), key_chooser_(nullptr), field_chooser_(nullptr),
       scan_len_chooser_(nullptr), insert_key_sequence_(nullptr),
-      transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), record_count_(0) {
+      transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), record_count_(0),
+      explicit_transaction_mode_(false) {
   }
 
   virtual ~CoreWorkload() {
@@ -212,6 +216,7 @@ class CoreWorkload {
   DB::Status TransactionScan(DB &db);
   DB::Status TransactionUpdate(DB &db);
   DB::Status TransactionInsert(DB &db);
+  DB::Status TransactionMultiKeyAcid(DB &db);
 
   std::string table_name_;
   int field_count_;
@@ -228,6 +233,7 @@ class CoreWorkload {
   bool ordered_inserts_;
   size_t record_count_;
   int zero_padding_;
+  bool explicit_transaction_mode_;
   
   // Reusable buffers to avoid allocations in hot path
   std::string key_buffer_;
