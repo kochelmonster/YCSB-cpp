@@ -1,0 +1,27 @@
+# YCSB-cpp Application Workload: Ordered Range Scan (100 Items)
+# Real-world pattern:
+#   - Batch export
+#   - Larger history traversal
+#   - Sequential window processing
+#
+# Read/scan ratio: 50/50
+# Scan length: fixed 100 items
+# Request distribution: zipfian
+
+recordcount=100000
+operationcount=100000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+
+readallfields=true
+
+readproportion=0.50
+updateproportion=0
+scanproportion=0.50
+insertproportion=0
+readmodifywriteproportion=0
+
+requestdistribution=zipfian
+
+minscanlength=100
+maxscanlength=100
+scanlengthdistribution=uniform

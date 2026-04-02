@@ -99,6 +99,8 @@ const std::string CoreWorkload::FIELD_NAME_PREFIX = "fieldnameprefix";
 const std::string CoreWorkload::FIELD_NAME_PREFIX_DEFAULT = "field";
 
 const std::string CoreWorkload::ZIPFIAN_CONST_PROPERTY = "zipfian_const";
+const std::string CoreWorkload::TRANSACTION_MODE_PROPERTY = "transactionmode";
+const std::string CoreWorkload::TRANSACTION_MODE_DEFAULT = "none";
 
 namespace ycsbc {
 
@@ -150,6 +152,7 @@ void CoreWorkload::Init(const utils::Properties &p) {
   int insert_start = std::stoi(p.GetProperty(INSERT_START_PROPERTY, INSERT_START_DEFAULT));
 
   zero_padding_ = std::stoi(p.GetProperty(ZERO_PADDING_PROPERTY, ZERO_PADDING_DEFAULT));
+  explicit_transaction_mode_ = p.GetProperty(TRANSACTION_MODE_PROPERTY, TRANSACTION_MODE_DEFAULT) == "multikey_acid";
 
   read_all_fields_ = utils::StrToBool(p.GetProperty(READ_ALL_FIELDS_PROPERTY,
                                                     READ_ALL_FIELDS_DEFAULT));
@@ -302,6 +305,10 @@ bool CoreWorkload::DoInsert(DB &db) {
 }
 
 bool CoreWorkload::DoTransaction(DB &db) {
+  if (explicit_transaction_mode_) {
+    return TransactionMultiKeyAcid(db) == DB::kOK;
+  }
+
   DB::Status status;
   switch (op_chooser_.Next()) {
     case READ:
@@ -394,6 +401,58 @@ DB::Status CoreWorkload::TransactionInsert(DB &db) {
   DB::Status s = db.Insert(table_name_, key_buffer_, values_buffer_);
   transaction_insert_key_sequence_->Acknowledge(key_num);
   return s;
+}
+
+DB::Status CoreWorkload::TransactionMultiKeyAcid(DB &db) {
+  uint64_t first_key_num = NextTransactionKeyNum();
+  uint64_t second_key_num;
+  do {
+    second_key_num = NextTransactionKeyNum();
+  } while (record_count_ > 1 && second_key_num == first_key_num);
+
+  std::string first_key = BuildKeyName(first_key_num);
+  std::string second_key = BuildKeyName(second_key_num);
+
+  DB::Status status = db.BeginTransaction();
+  if (status != DB::kOK) {
+    return status;
+  }
+
+  result_buffer_.clear();
+  status = db.Read(table_name_, first_key, NULL, result_buffer_);
+  if (status != DB::kOK) {
+    db.RollbackTransaction();
+    return status;
+  }
+
+  Fields second_result;
+  status = db.Read(table_name_, second_key, NULL, second_result);
+  if (status != DB::kOK) {
+    db.RollbackTransaction();
+    return status;
+  }
+
+  values_buffer_.clear();
+  BuildSingleValue(values_buffer_);
+  status = db.Update(table_name_, first_key, values_buffer_);
+  if (status != DB::kOK) {
+    db.RollbackTransaction();
+    return status;
+  }
+
+  Fields second_update;
+  BuildSingleValue(second_update);
+  status = db.Update(table_name_, second_key, second_update);
+  if (status != DB::kOK) {
+    db.RollbackTransaction();
+    return status;
+  }
+
+  status = db.CommitTransaction();
+  if (status != DB::kOK) {
+    db.RollbackTransaction();
+  }
+  return status;
 }
 
 } // ycsbc

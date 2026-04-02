@@ -24,6 +24,12 @@ class WTDB : public DB {
 
   void Cleanup();
 
+  Status BeginTransaction();
+
+  Status CommitTransaction();
+
+  Status RollbackTransaction();
+
   Status Read(const std::string &table, const std::string &key,
               const std::unordered_set<std::string> *fields, Fields &result) {
     return (this->*(method_read_))(table, key, fields, result);
@@ -73,6 +79,7 @@ class WTDB : public DB {
   static WT_CONNECTION *conn_;
   WT_SESSION *session_{nullptr};
   WT_CURSOR *cursor_{nullptr};
+  bool transaction_active_{false};
 
   static int ref_cnt_;
   static std::mutex mu_;

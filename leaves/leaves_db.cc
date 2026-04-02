@@ -104,6 +104,31 @@ void LeavesDB::Cleanup() {
   }
 }
 
+DB::Status LeavesDB::BeginTransaction() {
+  if (txn_active_) return kError;
+  FlushPending();
+  cursor_.start_transaction();
+  pending_ = 0;
+  txn_active_ = true;
+  return kOK;
+}
+
+DB::Status LeavesDB::CommitTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  cursor_.commit(sync_);
+  pending_ = 0;
+  return kOK;
+}
+
+DB::Status LeavesDB::RollbackTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  cursor_.rollback();
+  pending_ = 0;
+  return kOK;
+}
+
 DB::Status LeavesDB::Read(const std::string& table, const std::string& key,
                           const std::unordered_set<std::string>* fields,
                           Fields& result) {

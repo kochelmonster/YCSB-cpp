@@ -69,6 +69,169 @@
                     "ignoreFailures": true
                 }
             ]
+        },
+        {
+            "name": "Debug YCSB - Catch Exceptions (Leaves Workload A)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-debug/ycsb",
+            "args": [
+                "-db",
+                "leaves",
+                "-P",
+                "leaves/leaves.properties",
+                "-P",
+                "workloads/workloada",
+                "-load",
+                "-s"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Catch C++ exceptions",
+                    "text": "catch throw",
+                    "ignoreFailures": false
+                },
+                {
+                    "description": "Break on std::bad_weak_ptr",
+                    "text": "catch throw std::bad_weak_ptr",
+                    "ignoreFailures": false
+                }
+            ]
+        },
+        {
+            "name": "Debug YCSB - Catch Exceptions (Leaves Workload A RUN)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-debug/ycsb",
+            "args": [
+                "-db",
+                "leaves",
+                "-P",
+                "leaves/leaves.properties",
+                "-P",
+                "workloads/workloada",
+                "-run",
+                "-s"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Catch C++ exceptions",
+                    "text": "catch throw",
+                    "ignoreFailures": false
+                },
+                {
+                    "description": "Break on std::bad_weak_ptr",
+                    "text": "catch throw std::bad_weak_ptr",
+                    "ignoreFailures": false
+                }
+            ],
+            "preLaunchTask": ""
+        },
+        {
+            "name": "Debug YCSB - Release Build (Leaves Load)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/ycsb",
+            "args": [
+                "-db",
+                "leaves",
+                "-P",
+                "leaves/leaves.properties",
+                "-P",
+                "workloads/workloada",
+                "-load",
+                "-s"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Catch C++ exceptions",
+                    "text": "catch throw",
+                    "ignoreFailures": false
+                }
+            ]
+        },
+        {
+            "name": "Debug YCSB - Release Build (Leaves Run)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/ycsb",
+            "args": [
+                "-db",
+                "leaves",
+                "-P",
+                "leaves/leaves.properties",
+                "-P",
+                "workloads/workloada",
+                "-run",
+                "-s"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Catch C++ exceptions",
+                    "text": "catch throw",
+                    "ignoreFailures": false
+                }
+            ]
         }
     ]
 }

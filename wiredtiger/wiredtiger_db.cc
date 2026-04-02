@@ -45,6 +45,15 @@ namespace {
   const std::string PROP_IN_MEMORY = WT_PREFIX ".in_memory";
   const std::string PROP_IN_MEMORY_DEFAULT = "false";
 
+  const std::string PROP_LOG_ENABLED = WT_PREFIX ".log.enabled";
+  const std::string PROP_LOG_ENABLED_DEFAULT = "";
+
+  const std::string PROP_TRANSACTION_SYNC_ENABLED = WT_PREFIX ".transaction_sync.enabled";
+  const std::string PROP_TRANSACTION_SYNC_ENABLED_DEFAULT = "";
+
+  const std::string PROP_TRANSACTION_SYNC_METHOD = WT_PREFIX ".transaction_sync.method";
+  const std::string PROP_TRANSACTION_SYNC_METHOD_DEFAULT = "";
+
   const std::string PROP_LSM_MGR_MERGE = WT_PREFIX ".lsm_mgr.merge";
   const std::string PROP_LSM_MGR_MERGE_DEFAULT = "true";
 
@@ -129,9 +138,22 @@ void WTDB::Init(){
       const std::string &cache_size = props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT);
       const std::string &direct_io = props.GetProperty(PROP_DIRECT_IO, PROP_DIRECT_IO_DEFAULT);
       const std::string &in_memory = props.GetProperty(PROP_IN_MEMORY, PROP_IN_MEMORY_DEFAULT);
+      const std::string &log_enabled = props.GetProperty(PROP_LOG_ENABLED, PROP_LOG_ENABLED_DEFAULT);
+      const std::string &transaction_sync_enabled = props.GetProperty(PROP_TRANSACTION_SYNC_ENABLED, PROP_TRANSACTION_SYNC_ENABLED_DEFAULT);
+      const std::string &transaction_sync_method = props.GetProperty(PROP_TRANSACTION_SYNC_METHOD, PROP_TRANSACTION_SYNC_METHOD_DEFAULT);
       if(!cache_size.empty()) db_config += "cache_size="+ cache_size+ ",";
       if(!direct_io.empty())  db_config += "direct_io=" + direct_io + ",";
       if(!in_memory.empty())  db_config += "in_memory=" + in_memory + ",";
+      if(!log_enabled.empty()) db_config += "log=(enabled=" + log_enabled + "),";
+      if(!transaction_sync_enabled.empty() || !transaction_sync_method.empty()) {
+        std::string transaction_sync_config;
+        if(!transaction_sync_enabled.empty()) transaction_sync_config += "enabled=" + transaction_sync_enabled;
+        if(!transaction_sync_method.empty()) {
+          if(!transaction_sync_config.empty()) transaction_sync_config += ",";
+          transaction_sync_config += "method=" + transaction_sync_method;
+        }
+        db_config += "transaction_sync=(" + transaction_sync_config + "),";
+      }
     }
     { // 2.2 LSM Manager
       std::string lsm_config;
@@ -194,12 +216,57 @@ void WTDB::Init(){
 
 void WTDB::Cleanup(){
   const std::lock_guard<std::mutex> lock(mu_);
+  if (transaction_active_) {
+    session_->rollback_transaction(session_, NULL);
+    transaction_active_ = false;
+  }
   cursor_->close(cursor_);
   error_check(session_->close(session_, NULL));
   if (--ref_cnt_) {
     return;
   }
   error_check(conn_->close(conn_, NULL));
+}
+
+DB::Status WTDB::BeginTransaction() {
+  if (transaction_active_) {
+    return kError;
+  }
+
+  int ret = session_->begin_transaction(session_, NULL);
+  if (ret != 0) {
+    throw utils::Exception(WT_PREFIX " begin_transaction error");
+  }
+  transaction_active_ = true;
+  return kOK;
+}
+
+DB::Status WTDB::CommitTransaction() {
+  if (!transaction_active_) {
+    return kNotImplemented;
+  }
+
+  int ret = session_->commit_transaction(session_, NULL);
+  if (ret != 0) {
+    transaction_active_ = false;
+    throw utils::Exception(WT_PREFIX " commit_transaction error");
+  }
+  transaction_active_ = false;
+  return kOK;
+}
+
+DB::Status WTDB::RollbackTransaction() {
+  if (!transaction_active_) {
+    return kNotImplemented;
+  }
+
+  int ret = session_->rollback_transaction(session_, NULL);
+  if (ret != 0) {
+    transaction_active_ = false;
+    throw utils::Exception(WT_PREFIX " rollback_transaction error");
+  }
+  transaction_active_ = false;
+  return kOK;
 }
 
 DB::Status WTDB::ReadSingleEntry(const std::string &table, const std::string &key,
@@ -237,7 +304,7 @@ DB::Status WTDB::ScanSingleEntry(const std::string &table, const std::string &ke
   if (exact < 0) {
     ret = cursor_->next(cursor_);
   }
-  for(int i=0; !ret && i<len; ++i){
+  for (int i = 0; !ret && i < len; ++i) {
     error_check(cursor_->get_value(cursor_, &v));
     result.emplace_back();
     Fields &values = result.back();
@@ -246,6 +313,15 @@ DB::Status WTDB::ScanSingleEntry(const std::string &table, const std::string &ke
       readonly.filter(values, *fields);
     } else {
       values = readonly;
+    }
+
+    // Move to the next key for the following scan step.
+    if (i + 1 < len) {
+      ret = cursor_->next(cursor_);
+      if (ret == WT_NOTFOUND) {
+        break;
+      }
+      error_check(ret);
     }
   }
   return kOK;

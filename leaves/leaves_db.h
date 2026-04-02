@@ -23,7 +23,7 @@ namespace ycsbc {
 
 class LeavesDB : public DB {
  public:
-  LeavesDB() : fieldcount_(0), binary_key_(false), batch_size_(1), pending_(0) {}
+  LeavesDB() : fieldcount_(0), binary_key_(false), batch_size_(1), pending_(0), txn_active_(false) {}
   ~LeavesDB() {}
 
   void Init();
@@ -41,6 +41,10 @@ class LeavesDB : public DB {
   Status Insert(const std::string &table, const std::string &key, Fields &values);
 
   Status Delete(const std::string &table, const std::string &key);
+
+  Status BeginTransaction();
+  Status CommitTransaction();
+  Status RollbackTransaction();
 
  private:
   enum LeavesFormat {
@@ -61,6 +65,7 @@ class LeavesDB : public DB {
   bool binary_key_;
   int batch_size_;
   int pending_;
+  bool txn_active_;
   char key_buf_[8];
 
   // Encode a YCSB key ("user" + decimal) into a leaves Slice.
@@ -79,6 +84,7 @@ class LeavesDB : public DB {
 
   // Commit pending mutations if any.
   void FlushPending() {
+    if (txn_active_) return;
     if (pending_ > 0) {
       cursor_.commit(sync_);
       pending_ = 0;
@@ -87,6 +93,7 @@ class LeavesDB : public DB {
 
   // Record one mutation; commit when batch is full.
   void CommitMutation() {
+    if (txn_active_) return;
     if (++pending_ >= batch_size_) {
       cursor_.commit(sync_);
       pending_ = 0;
