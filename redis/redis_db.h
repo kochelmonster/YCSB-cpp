@@ -16,7 +16,7 @@ namespace ycsbc {
 
 class RedisDB : public DB {
  public:
-  RedisDB() : context_(nullptr) {}
+  RedisDB() : context_(nullptr), timeout_ms_(1000), destroy_(false) {}
   ~RedisDB() {}
 
   void Init();
@@ -39,9 +39,16 @@ class RedisDB : public DB {
   std::string host_;
   int port_;
   int timeout_ms_;
+  bool destroy_;
   
   std::string BuildRedisKey(const std::string &table, const std::string &key);
+  std::string BuildIndexKey(const std::string &table);
   void CheckReply(redisReply *reply);
+  Status ReadHashFields(const std::string &redis_key,
+                        const std::unordered_set<std::string> *fields,
+                        Fields &result);
+  Status IndexKey(const std::string &table, const std::string &key);
+  Status DeindexKey(const std::string &table, const std::string &key);
 };
 
 DB *NewRedisDB();

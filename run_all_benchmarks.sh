@@ -23,10 +23,7 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 MATRIX_MODE="${MATRIX_MODE:-throughput}"
 LOAD_BATCH_SIZE="${LOAD_BATCH_SIZE:-64}"
 
-DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves")
-if [ "${INCLUDE_REDIS:-0}" = "1" ]; then
-    DATABASES+=("redis")
-fi
+DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite" "redis")
 if [ -n "${BENCHMARK_DATABASES:-}" ]; then
     read -r -a DATABASES <<< "$BENCHMARK_DATABASES"
 fi
@@ -231,6 +228,13 @@ scenario_db_args() {
     case "$db" in
         leaves|leveldb|rocksdb|lmdb)
             echo "-p ${db}.binary_key=${binary_key} -p ${db}.batch_size=${batch_size}"
+            ;;
+        redis)
+            if [ "$phase" = "load" ]; then
+                echo "-p redis.destroy=true"
+            else
+                echo "-p redis.destroy=false"
+            fi
             ;;
         *)
             echo ""
