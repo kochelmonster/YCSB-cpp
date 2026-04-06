@@ -20,6 +20,7 @@
 #include "client.h"
 #include "core_workload.h"
 #include "db_factory.h"
+#include "db_writer_proxy.h"
 #include "measurements.h"
 #include "utils/countdown_latch.h"
 #include "utils/rate_limit.h"
@@ -113,6 +114,28 @@ int main(const int argc, const char *argv[]) {
     dbs.push_back(db);
   }
 
+  // Dedicated writer thread setup
+  const bool dedicated_writer = (props.GetProperty("dedicated_writer", "false") == "true");
+  ycsbc::SharedWriteQueue *write_queue = nullptr;
+  ycsbc::DB *writer_db = nullptr;
+  std::future<void> writer_future;
+
+  if (dedicated_writer && !dbs[0]->SupportsMultiThreadWrite()) {
+    write_queue = new ycsbc::SharedWriteQueue();
+    writer_db = ycsbc::DBFactory::CreateDB(&props, measurements);
+    if (writer_db == nullptr) {
+      std::cerr << "Failed to create writer DB" << std::endl;
+      exit(1);
+    }
+    // Wrap each per-thread DB in a write proxy
+    for (int i = 0; i < num_threads; i++) {
+      dbs[i] = new ycsbc::DBWriterProxy(dbs[i], write_queue);
+    }
+    // Start the dedicated writer thread
+    writer_future = std::async(std::launch::async, ycsbc::WriterThreadFunc, writer_db, write_queue);
+    std::cerr << "Dedicated writer thread enabled" << std::endl;
+  }
+
   ycsbc::CoreWorkload wl;
   wl.Init(props);
 
@@ -159,6 +182,11 @@ int main(const int argc, const char *argv[]) {
     std::cout << "Load runtime(sec): " << runtime << std::endl;
     std::cout << "Load operations(ops): " << sum << std::endl;
     std::cout << "Load throughput(ops/sec): " << sum / runtime << std::endl;
+  }
+
+  // Drain the write queue between phases
+  if (write_queue) {
+    write_queue->Drain();
   }
 
   measurements->Reset();
@@ -221,6 +249,15 @@ int main(const int argc, const char *argv[]) {
     std::cout << "Run runtime(sec): " << runtime << std::endl;
     std::cout << "Run operations(ops): " << sum << std::endl;
     std::cout << "Run throughput(ops/sec): " << sum / runtime << std::endl;
+  }
+
+  // Shut down the dedicated writer thread
+  if (write_queue) {
+    write_queue->Drain();
+    write_queue->RequestStop();
+    writer_future.get();
+    delete writer_db;
+    delete write_queue;
   }
 
   for (int i = 0; i < num_threads; i++) {

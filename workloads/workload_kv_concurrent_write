@@ -1,0 +1,28 @@
+# YCSB-cpp Application Workload: Concurrent Write-Heavy
+# Real-world pattern:
+#   - Multi-threaded log/event ingestion
+#   - Parallel ETL pipelines
+#   - High-fanin write aggregation
+#
+# This workload highlights engines with concurrent write scalability
+# (e.g. RocksDB group commit) vs single-writer designs (e.g. LMDB).
+#
+# Insert/update/read ratio: 70/20/10
+# Request distribution: uniform
+# Threads: 8
+
+recordcount=5000000
+operationcount=5000000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+threadcount=8
+
+readallfields=true
+
+readproportion=0.10
+updateproportion=0.20
+scanproportion=0
+insertproportion=0.70
+readmodifywriteproportion=0
+
+requestdistribution=uniform
+insertorder=hashed

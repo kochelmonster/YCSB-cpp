@@ -27,11 +27,14 @@ WORKLOAD_LABELS = {
     "workload_kv_batch_update": "Batch Update",
     "workload_kv_acid_aci": "ACID A/C/I",
     "workload_kv_acid_txn": "ACID Txn",
+    "workload_kv_concurrent_write": "Concurrent Write (8T)",
+    "workload_kv_concurrent_session": "Concurrent Session (8T)",
 }
 
 ACID_WORKLOAD_LABELS = {"ACID A/C/I", "ACID Txn"}
+CONCURRENT_WORKLOAD_LABELS = {"Concurrent Write (8T)", "Concurrent Session (8T)", "Concurrent Write (8T) DW", "Concurrent Session (8T) DW"}
 
-DATABASE_ORDER = ["leaves", "lmdb", "leveldb", "rocksdb", "wiredtiger", "sqlite", "redis"]
+DATABASE_ORDER = ["leaves", "lmdb", "leveldb", "rocksdb", "wiredtiger", "sqlite", "redis", "badger", "dragonfly"]
 COLORS = {
     "leaves": "#15616d",
     "lmdb": "#2a9d8f",
@@ -40,6 +43,8 @@ COLORS = {
     "wiredtiger": "#e76f51",
     "sqlite": "#5c7cfa",
     "redis": "#8d99ae",
+    "badger": "#9b59b6",
+    "dragonfly": "#e74c3c",
 }
 
 
@@ -104,6 +109,9 @@ def prepare_matrix(csv_path: Path) -> pd.DataFrame:
     frame["load_throughput_ops_sec"] = pd.to_numeric(frame["load_throughput_ops_sec"])
     frame["run_throughput_ops_sec"] = pd.to_numeric(frame["run_throughput_ops_sec"])
     frame["workload_label"] = frame["workload"].map(WORKLOAD_LABELS).fillna(frame["workload"])
+    # Append " DW" suffix for dedicated_writer scenarios so they appear as separate bars
+    dw_mask = frame["scenario"].str.endswith("_dw")
+    frame.loc[dw_mask, "workload_label"] = frame.loc[dw_mask, "workload_label"] + " DW"
     return frame
 
 
@@ -174,7 +182,7 @@ def main() -> None:
     # Group by workload and database, taking max throughput across scenarios
     full_run_pivot = throughput_df_all.groupby(['workload_label', 'database'])['run_throughput_ops_sec'].max().unstack(fill_value=0)
     all_run_pivot = full_run_pivot.loc[
-        [label for label in full_run_pivot.index if label not in ACID_WORKLOAD_LABELS]
+        [label for label in full_run_pivot.index if label not in ACID_WORKLOAD_LABELS and label not in CONCURRENT_WORKLOAD_LABELS]
     ]
     
     comparison_chart = output_dir / "workload_comparison.png"
@@ -188,7 +196,7 @@ def main() -> None:
 
     full_avg_run_pivot = throughput_df_all.groupby(["workload_label", "database"])["run_throughput_ops_sec"].mean().unstack(fill_value=0)
     avg_run_pivot = full_avg_run_pivot.loc[
-        [label for label in full_avg_run_pivot.index if label not in ACID_WORKLOAD_LABELS]
+        [label for label in full_avg_run_pivot.index if label not in ACID_WORKLOAD_LABELS and label not in CONCURRENT_WORKLOAD_LABELS]
     ]
     average_chart = output_dir / "workload_comparison_average.png"
     save_grouped_bars(
@@ -225,6 +233,33 @@ def main() -> None:
             "Run throughput (ops/sec)",
         )
         generated_files.append(acid_average_chart)
+
+    # Generate a focused concurrent-only chart for multi-threaded workloads.
+    concurrent_run_pivot = full_run_pivot.loc[
+        [label for label in full_run_pivot.index if label in CONCURRENT_WORKLOAD_LABELS]
+    ]
+    if not concurrent_run_pivot.empty:
+        concurrent_chart = output_dir / "concurrent_workload_comparison.png"
+        save_grouped_bars(
+            concurrent_run_pivot,
+            concurrent_chart,
+            "Concurrent Workload Performance Comparison (8 Threads)",
+            "Run throughput (ops/sec)",
+        )
+        generated_files.append(concurrent_chart)
+
+    concurrent_avg_run_pivot = full_avg_run_pivot.loc[
+        [label for label in full_avg_run_pivot.index if label in CONCURRENT_WORKLOAD_LABELS]
+    ]
+    if not concurrent_avg_run_pivot.empty:
+        concurrent_average_chart = output_dir / "concurrent_workload_comparison_average.png"
+        save_grouped_bars(
+            concurrent_avg_run_pivot,
+            concurrent_average_chart,
+            "Concurrent Workload Performance Comparison (8 Threads, Average)",
+            "Run throughput (ops/sec)",
+        )
+        generated_files.append(concurrent_average_chart)
 
     print(f"Using throughput CSV: {throughput_csv}")
     print(f"Graphs written to: {output_dir}")

@@ -99,6 +99,20 @@ void LeavesDB::Cleanup() {
   const std::lock_guard<std::mutex> lock(mu_);
   ref_cnt_--;
   if (ref_cnt_ == 0) {
+    auto& t = leaves::_txn_timing();
+    uint64_t n = t.txn_count.load();
+    if (n > 0) {
+      fprintf(stderr, "\\n=== LEAVES TXN TIMING (n=%lu) ===\\n", n);
+      fprintf(stderr, "  lock_wait  avg: %lu ns\\n", t.lock_wait_ns.load() / n);
+      fprintf(stderr, "  lock_hold  avg: %lu ns\\n", t.lock_hold_ns.load() / n);
+      fprintf(stderr, "  gc_walk    avg: %lu ns\\n", t.gc_walk_ns.load() / n);
+      fprintf(stderr, "  prepare    avg: %lu ns\\n", t.prepare_commit_ns.load() / n);
+      fprintf(stderr, "  flush      avg: %lu ns\\n", t.flush_ns.load() / n);
+      fprintf(stderr, "  total_lock_wait: %.3f s\\n", t.lock_wait_ns.load() / 1e9);
+      fprintf(stderr, "  total_lock_hold: %.3f s\\n", t.lock_hold_ns.load() / 1e9);
+      fprintf(stderr, "  total_flush:     %.3f s\\n", t.flush_ns.load() / 1e9);
+      fprintf(stderr, "===\\n\\n");
+    }
     storage_.reset();
     std::cout << "Leaves database closed" << std::endl;
   }
@@ -139,7 +153,12 @@ DB::Status LeavesDB::Read(const std::string& table, const std::string& key,
     cursor_.find(key_slice);
 
     if (!cursor_.is_valid()) {
-      return kNotFound;
+      // Refresh cursor to see latest committed data and retry
+      cursor_.update();
+      cursor_.find(key_slice);
+      if (!cursor_.is_valid()) {
+        return kNotFound;
+      }
     }
     
     leaves::Slice value_slice = cursor_.value();

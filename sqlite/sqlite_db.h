@@ -38,6 +38,8 @@ class SqliteDB : public DB {
 
   Status Delete(const std::string &table, const std::string &key);
 
+  bool SupportsMultiThreadWrite() const override { return false; }
+
  private:
   void OpenDB();
   void SetPragma();

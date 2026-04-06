@@ -42,6 +42,8 @@ class LmdbDB : public DB {
 
   Status Delete(const std::string &table, const std::string &key);
 
+  bool SupportsMultiThreadWrite() const override { return false; }
+
   Status BeginTransaction();
   Status CommitTransaction();
   Status RollbackTransaction();

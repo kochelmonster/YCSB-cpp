@@ -23,7 +23,7 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 MATRIX_MODE="${MATRIX_MODE:-throughput}"
 LOAD_BATCH_SIZE="${LOAD_BATCH_SIZE:-64}"
 
-DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite" "redis")
+DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite" "redis" "badger" "dragonfly")
 if [ -n "${BENCHMARK_DATABASES:-}" ]; then
     read -r -a DATABASES <<< "$BENCHMARK_DATABASES"
 fi
@@ -52,6 +52,10 @@ SCENARIOS=(
     "batch_update_64"
     "acid_aci"
     "acid_txn"
+    "concurrent_write"
+    "concurrent_session"
+    "concurrent_write_dw"
+    "concurrent_session_dw"
 )
 
 if [ -n "${BENCHMARK_SCENARIOS:-}" ]; then
@@ -146,6 +150,18 @@ scenario_workloads() {
         acid_txn)
             echo "workload_kv_acid_txn"
             ;;
+        concurrent_write)
+            echo "workload_kv_concurrent_write"
+            ;;
+        concurrent_session)
+            echo "workload_kv_concurrent_session"
+            ;;
+        concurrent_write_dw)
+            echo "workload_kv_concurrent_write"
+            ;;
+        concurrent_session_dw)
+            echo "workload_kv_concurrent_session"
+            ;;
         *)
             echo "${BASE_WORKLOADS[*]}"
             ;;
@@ -225,19 +241,24 @@ scenario_db_args() {
         return 2
     fi
 
+    local dw_args=""
+    if [[ "$scenario" == *_dw ]] && [ "$phase" = "run" ]; then
+        dw_args="-p dedicated_writer=true"
+    fi
+
     case "$db" in
         leaves|leveldb|rocksdb|lmdb)
-            echo "-p ${db}.binary_key=${binary_key} -p ${db}.batch_size=${batch_size}"
+            echo "-p ${db}.binary_key=${binary_key} -p ${db}.batch_size=${batch_size} ${dw_args}"
             ;;
-        redis)
+        redis|dragonfly)
             if [ "$phase" = "load" ]; then
                 echo "-p redis.destroy=true"
             else
-                echo "-p redis.destroy=false"
+                echo "-p redis.destroy=false ${dw_args}"
             fi
             ;;
         *)
-            echo ""
+            echo "${dw_args}"
             ;;
     esac
 
@@ -264,6 +285,9 @@ clean_db_path() {
             ;;
         sqlite)
             rm -f /tmp/ycsb-sqlite.db /tmp/ycsb-sqlite.db-wal /tmp/ycsb-sqlite.db-shm
+            ;;
+        badger)
+            rm -rf /tmp/ycsb-badger
             ;;
         *)
             ;;
@@ -297,6 +321,9 @@ append_db_size() {
             ;;
         sqlite)
             db_path="/tmp/ycsb-sqlite.db"
+            ;;
+        badger)
+            db_path="/tmp/ycsb-badger"
             ;;
     esac
 

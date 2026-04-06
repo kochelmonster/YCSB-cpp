@@ -96,6 +96,9 @@ class DBWrapper : public DB {
     }
     return s;
   }
+  bool SupportsMultiThreadWrite() const override {
+    return db_->SupportsMultiThreadWrite();
+  }
  private:
   DB *db_;
   Measurements *measurements_;

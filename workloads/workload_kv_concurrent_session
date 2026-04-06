@@ -1,0 +1,27 @@
+# YCSB-cpp Application Workload: Concurrent Session Store
+# Real-world pattern:
+#   - Multi-threaded web session management
+#   - Parallel user state reads and updates
+#   - Concurrent mutable record access
+#
+# Same mix as session (50/50 read/update) but with 8 threads
+# to stress concurrent read-write scalability.
+#
+# Read/update ratio: 50/50
+# Request distribution: zipfian
+# Threads: 8
+
+recordcount=5000000
+operationcount=5000000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+threadcount=8
+
+readallfields=true
+
+readproportion=0.50
+updateproportion=0.50
+scanproportion=0
+insertproportion=0
+readmodifywriteproportion=0
+
+requestdistribution=zipfian

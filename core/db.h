@@ -113,6 +113,13 @@ class DB {
   ///
   virtual Status Delete(const std::string &table, const std::string &key) = 0;
 
+  ///
+  /// Whether this DB supports concurrent writes from multiple threads.
+  /// If false and dedicated_writer is enabled, writes will be funneled
+  /// through a single dedicated writer thread.
+  ///
+  virtual bool SupportsMultiThreadWrite() const { return true; }
+
   virtual ~DB() { }
 
   void SetProps(utils::Properties *props) {

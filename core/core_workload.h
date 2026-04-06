@@ -18,7 +18,6 @@
 #include "discrete_generator.h"
 #include "counter_generator.h"
 #include "acknowledged_counter_generator.h"
-#include "random_byte_generator.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
 
@@ -235,18 +234,8 @@ class CoreWorkload {
   int zero_padding_;
   bool explicit_transaction_mode_;
   
-  // Reusable buffers to avoid allocations in hot path
-  std::string key_buffer_;
-  Fields result_buffer_;
-  Fields values_buffer_;
-  std::unordered_set<std::string> fields_buffer_;
-  std::vector<Fields> scan_result_buffer_;
-  
   // Pre-built field names to avoid string construction in hot path
   std::vector<std::string> field_names_;
-  
-  // Reusable random byte generator
-  RandomByteGenerator byte_generator_;
 };
 
 } // ycsbc

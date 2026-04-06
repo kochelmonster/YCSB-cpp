@@ -19,9 +19,18 @@
 #include <algorithm>
 #include <random>
 #include <string>
+#include <unordered_set>
 
 using ycsbc::CoreWorkload;
 using std::string;
+
+// Thread-local reusable buffers (moved from CoreWorkload members for thread-safety)
+static thread_local std::string tl_key_buffer;
+static thread_local ycsbc::Fields tl_result_buffer;
+static thread_local ycsbc::Fields tl_values_buffer;
+static thread_local std::unordered_set<std::string> tl_fields_buffer;
+static thread_local std::vector<ycsbc::Fields> tl_scan_result_buffer;
+static thread_local ycsbc::RandomByteGenerator tl_byte_generator;
 
 const char *ycsbc::kOperationString[ycsbc::MAXOPTYPE] = {
   "INSERT",
@@ -111,20 +120,6 @@ void CoreWorkload::Init(const utils::Properties &p) {
   field_prefix_ = p.GetProperty(FIELD_NAME_PREFIX, FIELD_NAME_PREFIX_DEFAULT);
   field_len_generator_ = GetFieldLenGenerator(p);
 
-  // Reserve buffers to avoid reallocations in hot path
-  // Key buffer: typical key format is "user" + padded number, reserve for max size
-  key_buffer_.reserve(64);
-  
-  // Result and values buffers: reserve for field_count_ fields
-  result_buffer_.reserve(field_count_);
-  values_buffer_.reserve(field_count_);
-  
-  // Fields buffer: used when reading/filtering specific fields (typically 1-2 fields)
-  fields_buffer_.reserve(field_count_);
-  
-  // Scan result buffer: reserve for typical scan length (defaults to 1-1000, reserve for moderate size)
-  scan_result_buffer_.reserve(100);
-  
   // Pre-build field names to avoid string construction in hot path
   field_names_.reserve(field_count_);
   for (int i = 0; i < field_count_; ++i) {
@@ -240,19 +235,19 @@ std::string CoreWorkload::BuildKeyName(uint64_t key_num) {
     key_num = utils::Hash(key_num);
   }
   
-  // Build key directly in key_buffer_ to avoid temporary string allocations
-  key_buffer_.clear();
-  key_buffer_.append("user");
+  // Build key directly in thread-local buffer to avoid allocations
+  tl_key_buffer.clear();
+  tl_key_buffer.append("user");
   
   // Convert key_num to string and calculate padding
   char num_buf[32];
   int num_len = snprintf(num_buf, sizeof(num_buf), "%lu", key_num);
   
   int fill = std::max(0, zero_padding_ - num_len);
-  key_buffer_.append(fill, '0');
-  key_buffer_.append(num_buf, num_len);
+  tl_key_buffer.append(fill, '0');
+  tl_key_buffer.append(num_buf, num_len);
   
-  return key_buffer_;
+  return tl_key_buffer;
 }
 
 void CoreWorkload::BuildValues(Fields &values) {
@@ -265,7 +260,7 @@ void CoreWorkload::BuildValues(Fields &values) {
     // Build value string
     std::string field_value;
     field_value.reserve(len);
-    std::generate_n(std::back_inserter(field_value), len, [this]() { return byte_generator_.Next(); });
+    std::generate_n(std::back_inserter(field_value), len, []() { return tl_byte_generator.Next(); });
     
     values.push(field_name, field_value);
   }
@@ -279,7 +274,7 @@ void CoreWorkload::BuildSingleValue(Fields &values) {
   // Build value string
   std::string field_value;
   field_value.reserve(len);
-  std::generate_n(std::back_inserter(field_value), len, [this]() { return byte_generator_.Next(); });
+  std::generate_n(std::back_inserter(field_value), len, []() { return tl_byte_generator.Next(); });
   
   values.push(field_name, field_value);
 }
@@ -298,10 +293,10 @@ const std::string& CoreWorkload::NextFieldName() {
 }
 
 bool CoreWorkload::DoInsert(DB &db) {
-  key_buffer_ = BuildKeyName(insert_key_sequence_->Next());
-  values_buffer_.clear();
-  BuildValues(values_buffer_);
-  return db.Insert(table_name_, key_buffer_, values_buffer_) == DB::kOK;
+  BuildKeyName(insert_key_sequence_->Next());
+  tl_values_buffer.clear();
+  BuildValues(tl_values_buffer);
+  return db.Insert(table_name_, tl_key_buffer, tl_values_buffer) == DB::kOK;
 }
 
 bool CoreWorkload::DoTransaction(DB &db) {
@@ -334,71 +329,71 @@ bool CoreWorkload::DoTransaction(DB &db) {
 
 DB::Status CoreWorkload::TransactionRead(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  key_buffer_ = BuildKeyName(key_num);
-  result_buffer_.clear();
+  BuildKeyName(key_num);
+  tl_result_buffer.clear();
   if (!read_all_fields()) {
-    fields_buffer_.clear();
-    fields_buffer_.insert(NextFieldName());
-    return db.Read(table_name_, key_buffer_, &fields_buffer_, result_buffer_);
+    tl_fields_buffer.clear();
+    tl_fields_buffer.insert(NextFieldName());
+    return db.Read(table_name_, tl_key_buffer, &tl_fields_buffer, tl_result_buffer);
   } else {
-    return db.Read(table_name_, key_buffer_, NULL, result_buffer_);
+    return db.Read(table_name_, tl_key_buffer, NULL, tl_result_buffer);
   }
 }
 
 DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  key_buffer_ = BuildKeyName(key_num);
-  result_buffer_.clear();
+  BuildKeyName(key_num);
+  tl_result_buffer.clear();
 
   if (!read_all_fields()) {
-    fields_buffer_.clear();
-    fields_buffer_.insert(NextFieldName());
-    db.Read(table_name_, key_buffer_, &fields_buffer_, result_buffer_);
+    tl_fields_buffer.clear();
+    tl_fields_buffer.insert(NextFieldName());
+    db.Read(table_name_, tl_key_buffer, &tl_fields_buffer, tl_result_buffer);
   } else {
-    db.Read(table_name_, key_buffer_, NULL, result_buffer_);
+    db.Read(table_name_, tl_key_buffer, NULL, tl_result_buffer);
   }
 
-  values_buffer_.clear();
+  tl_values_buffer.clear();
   if (write_all_fields()) {
-    BuildValues(values_buffer_);
+    BuildValues(tl_values_buffer);
   } else {
-    BuildSingleValue(values_buffer_);
+    BuildSingleValue(tl_values_buffer);
   }
-  return db.Update(table_name_, key_buffer_, values_buffer_);
+  return db.Update(table_name_, tl_key_buffer, tl_values_buffer);
 }
 
 DB::Status CoreWorkload::TransactionScan(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  key_buffer_ = BuildKeyName(key_num);
+  BuildKeyName(key_num);
   int len = scan_len_chooser_->Next();
-  scan_result_buffer_.clear();
+  tl_scan_result_buffer.clear();
   if (!read_all_fields()) {
-    fields_buffer_.clear();
-    fields_buffer_.insert(NextFieldName());
-    return db.Scan(table_name_, key_buffer_, len, &fields_buffer_, scan_result_buffer_);
+    tl_fields_buffer.clear();
+    tl_fields_buffer.insert(NextFieldName());
+    return db.Scan(table_name_, tl_key_buffer, len, &tl_fields_buffer, tl_scan_result_buffer);
   } else {
-    return db.Scan(table_name_, key_buffer_, len, NULL, scan_result_buffer_);
+    return db.Scan(table_name_, tl_key_buffer, len, NULL, tl_scan_result_buffer);
   }
 }
 
 DB::Status CoreWorkload::TransactionUpdate(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  key_buffer_ = BuildKeyName(key_num);
-  values_buffer_.clear();
+  BuildKeyName(key_num);
+  tl_values_buffer.clear();
   if (write_all_fields()) {
-    BuildValues(values_buffer_);
+    BuildValues(tl_values_buffer);
   } else {
-    BuildSingleValue(values_buffer_);
+    BuildSingleValue(tl_values_buffer);
   }
-  return db.Update(table_name_, key_buffer_, values_buffer_);
+  return db.Update(table_name_, tl_key_buffer, tl_values_buffer);
 }
 
 DB::Status CoreWorkload::TransactionInsert(DB &db) {
   uint64_t key_num = transaction_insert_key_sequence_->Next();
-  key_buffer_ = BuildKeyName(key_num);
-  values_buffer_.clear();
-  BuildValues(values_buffer_);
-  DB::Status s = db.Insert(table_name_, key_buffer_, values_buffer_);
+  BuildKeyName(key_num);
+  tl_values_buffer.clear();
+  BuildValues(tl_values_buffer);
+  DB::Status s = db.Insert(table_name_, tl_key_buffer, tl_values_buffer);
   transaction_insert_key_sequence_->Acknowledge(key_num);
   return s;
 }
@@ -418,8 +413,8 @@ DB::Status CoreWorkload::TransactionMultiKeyAcid(DB &db) {
     return status;
   }
 
-  result_buffer_.clear();
-  status = db.Read(table_name_, first_key, NULL, result_buffer_);
+  tl_result_buffer.clear();
+  status = db.Read(table_name_, first_key, NULL, tl_result_buffer);
   if (status != DB::kOK) {
     db.RollbackTransaction();
     return status;
@@ -432,9 +427,9 @@ DB::Status CoreWorkload::TransactionMultiKeyAcid(DB &db) {
     return status;
   }
 
-  values_buffer_.clear();
-  BuildSingleValue(values_buffer_);
-  status = db.Update(table_name_, first_key, values_buffer_);
+  tl_values_buffer.clear();
+  BuildSingleValue(tl_values_buffer);
+  status = db.Update(table_name_, first_key, tl_values_buffer);
   if (status != DB::kOK) {
     db.RollbackTransaction();
     return status;

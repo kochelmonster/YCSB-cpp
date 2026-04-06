@@ -46,6 +46,8 @@ class LeavesDB : public DB {
   Status CommitTransaction();
   Status RollbackTransaction();
 
+  bool SupportsMultiThreadWrite() const override { return false; }
+
  private:
   enum LeavesFormat {
     kSingleRow,
