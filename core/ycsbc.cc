@@ -147,6 +147,25 @@ int main(const int argc, const char *argv[]) {
   if (do_load) {
     const int total_ops = stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
 
+    // Compute per-thread op counts up front (needed for pre-generation)
+    std::vector<int> load_thread_ops(num_threads);
+    for (int i = 0; i < num_threads; ++i) {
+      load_thread_ops[i] = total_ops / num_threads;
+      if (i < total_ops % num_threads) load_thread_ops[i]++;
+    }
+
+    // Pre-generate all keys and values outside the timed window so the measurement
+    // reflects DB cost, not YCSB framework cost (BuildKeyName, BuildValues, RNG, ...).
+    std::vector<std::vector<ycsbc::CoreWorkload::WorkItem>> load_pregen(num_threads);
+    for (int i = 0; i < num_threads; ++i) {
+      wl.PrepareOps(load_thread_ops[i], true, load_pregen[i]);
+    }
+
+    // Init all DB instances before starting the timer so open/mmap is excluded.
+    for (int i = 0; i < num_threads; i++) {
+      dbs[i]->Init();
+    }
+
     ycsbc::utils::CountDownLatch latch(num_threads);
     ycsbc::utils::Timer<double> timer;
 
@@ -158,13 +177,9 @@ int main(const int argc, const char *argv[]) {
     }
     std::vector<std::future<int>> client_threads;
     for (int i = 0; i < num_threads; ++i) {
-      int thread_ops = total_ops / num_threads;
-      if (i < total_ops % num_threads) {
-        thread_ops++;
-      }
-
       client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                                             thread_ops, true, true, !do_transaction, &latch, nullptr));
+                                             load_thread_ops[i], false, false, &latch,
+                                             nullptr, &load_pregen[i]));
     }
     assert((int)client_threads.size() == num_threads);
 
@@ -182,6 +197,13 @@ int main(const int argc, const char *argv[]) {
     std::cout << "Load runtime(sec): " << runtime << std::endl;
     std::cout << "Load operations(ops): " << sum << std::endl;
     std::cout << "Load throughput(ops/sec): " << sum / runtime << std::endl;
+
+    // For load-only runs, cleanup after timing window.
+    if (!do_transaction) {
+      for (int i = 0; i < num_threads; i++) {
+        dbs[i]->Cleanup();
+      }
+    }
   }
 
   // Drain the write queue between phases
@@ -202,6 +224,27 @@ int main(const int argc, const char *argv[]) {
 
     const int total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
 
+    // Compute per-thread op counts up front (needed for pre-generation)
+    std::vector<int> txn_thread_ops(num_threads);
+    for (int i = 0; i < num_threads; ++i) {
+      txn_thread_ops[i] = total_ops / num_threads;
+      if (i < total_ops % num_threads) txn_thread_ops[i]++;
+    }
+
+    // Pre-generate all keys and values outside the timed window so the measurement
+    // reflects DB cost, not YCSB framework cost.
+    std::vector<std::vector<ycsbc::CoreWorkload::WorkItem>> txn_pregen(num_threads);
+    for (int i = 0; i < num_threads; ++i) {
+      wl.PrepareOps(txn_thread_ops[i], false, txn_pregen[i]);
+    }
+
+    // Init for run-only case (no load phase ran; DB not yet opened).
+    if (!do_load) {
+      for (int i = 0; i < num_threads; i++) {
+        dbs[i]->Init();
+      }
+    }
+
     ycsbc::utils::CountDownLatch latch(num_threads);
     ycsbc::utils::Timer<double> timer;
 
@@ -214,10 +257,6 @@ int main(const int argc, const char *argv[]) {
     std::vector<std::future<int>> client_threads;
     std::vector<ycsbc::utils::RateLimiter *> rate_limiters;
     for (int i = 0; i < num_threads; ++i) {
-      int thread_ops = total_ops / num_threads;
-      if (i < total_ops % num_threads) {
-        thread_ops++;
-      }
       ycsbc::utils::RateLimiter *rlim = nullptr;
       if (ops_limit > 0 || rate_file != "") {
         int64_t per_thread_ops = ops_limit / num_threads;
@@ -225,7 +264,8 @@ int main(const int argc, const char *argv[]) {
       }
       rate_limiters.push_back(rlim);
       client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                                             thread_ops, false, !do_load, true, &latch, rlim));
+                                             txn_thread_ops[i], false, false, &latch,
+                                             rlim, &txn_pregen[i]));
     }
 
     std::future<void> rlim_future;
@@ -249,6 +289,11 @@ int main(const int argc, const char *argv[]) {
     std::cout << "Run runtime(sec): " << runtime << std::endl;
     std::cout << "Run operations(ops): " << sum << std::endl;
     std::cout << "Run throughput(ops/sec): " << sum / runtime << std::endl;
+
+    // Cleanup after timing window: flush/close DB outside measured time.
+    for (int i = 0; i < num_threads; i++) {
+      dbs[i]->Cleanup();
+    }
   }
 
   // Shut down the dedicated writer thread

@@ -56,6 +56,11 @@ file(GLOB_RECURSE YCSB_NULL_SRC "null/*.cc")
 include(FindThreads)
 
 add_executable(ycsb ${YCSB_CORE_SRC} ${YCSB_NULL_SRC})
+
+if(NOT MSVC)
+    set_source_files_properties(${YCSB_CORE_SRC} ${YCSB_NULL_SRC}
+        PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter")
+endif()
 target_include_directories(ycsb PRIVATE ${PROJECT_SOURCE_DIR})
 
 if (BIND_ROCKSDB)
@@ -64,6 +69,10 @@ if (BIND_ROCKSDB)
     set(WITH_BZ2 ON)
     file(GLOB_RECURSE YCSB_ROCKSDB_SRC "rocksdb/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_ROCKSDB_SRC})
+    if(NOT MSVC)
+        set_source_files_properties(${YCSB_ROCKSDB_SRC}
+            PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter")
+    endif()
 
     find_package(RocksDB CONFIG)
     if(RocksDB_FOUND)
@@ -91,6 +100,10 @@ if (BIND_LMDB)
     message(STATUS "BIND_LMDB - ON")
     file(GLOB_RECURSE YCSB_LMDB_SRC "lmdb/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_LMDB_SRC})
+    if(NOT MSVC)
+        set_source_files_properties(${YCSB_LMDB_SRC}
+            PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-type-limits")
+    endif()
 
     find_package(lmdb CONFIG)
     if(lmdb_FOUND)
@@ -111,6 +124,10 @@ if (BIND_LEVELDB)
     message(STATUS "BIND_LEVELDB - ON")
     file(GLOB_RECURSE YCSB_LEVELDB_SRC "leveldb/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_LEVELDB_SRC})
+    if(NOT MSVC)
+        set_source_files_properties(${YCSB_LEVELDB_SRC}
+            PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter")
+    endif()
 
     find_package(leveldb CONFIG)
     if(leveldb_FOUND)
@@ -131,6 +148,10 @@ if (BIND_WIREDTIGER)
     message(STATUS "BIND_WIREDTIGER - ON")
     file(GLOB_RECURSE YCSB_WT_SRC "wiredtiger/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_WT_SRC})
+    if(NOT MSVC)
+        set_source_files_properties(${YCSB_WT_SRC}
+            PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-missing-field-initializers")
+    endif()
     find_library(WIREDTIGER_LIB wiredtiger REQUIRED)
     find_path(WIREDTIGER_INCLUDE_DIR "wiredtiger.h" REQUIRED)
     target_link_libraries(ycsb PRIVATE ${WIREDTIGER_LIB})
@@ -147,14 +168,20 @@ if (BIND_LEAVES)
     # Leaves is header-only, so we just need to add include directory
     target_include_directories(ycsb PRIVATE /home/michael/src/leaves/include)
 
+    # Suppress pedantic and unused-parameter warnings for leaves headers/adapter
+    if(NOT MSVC)
+        set_source_files_properties(${YCSB_LEAVES_SRC}
+            PROPERTIES COMPILE_OPTIONS "-Wno-pedantic;-Wno-unused-parameter")
+    endif()
+
     # Add specific compiler optimizations for Leaves files with GCC only in Release mode
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_BUILD_TYPE STREQUAL "Release")
         foreach(LEAVES_FILE ${YCSB_LEAVES_SRC})
             set_source_files_properties(${LEAVES_FILE} PROPERTIES
-                COMPILE_FLAGS "-DNDEBUG -g -march=native -O3 -funroll-loops -flto=auto"
+                COMPILE_FLAGS "-DNDEBUG -DLEAVES_SINGLE_PROCESS -g -march=native -O3 -funroll-loops -flto=auto"
             )
         endforeach()
-        message(STATUS "Applied GCC optimizations to Leaves files: -DNDEBUG -g -march=native -O3 -funroll-loops -flto=auto")
+        message(STATUS "Applied GCC optimizations to Leaves files: -DNDEBUG -DLEAVES_SINGLE_PROCESS -g -march=native -O3 -funroll-loops -flto=auto")
     endif()
     
     message(STATUS "Found Leaves library (header-only)")
@@ -166,6 +193,10 @@ if (BIND_SQLITE)
     message(STATUS "BIND_SQLITE - ON")
     file(GLOB_RECURSE YCSB_SQLITE_SRC "sqlite/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_SQLITE_SRC})
+    if(NOT MSVC)
+        set_source_files_properties(${YCSB_SQLITE_SRC}
+            PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-unused-variable")
+    endif()
 
     find_package(SQLite3)
     if(SQLite3_FOUND)

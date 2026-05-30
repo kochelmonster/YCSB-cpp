@@ -398,6 +398,58 @@ DB::Status CoreWorkload::TransactionInsert(DB &db) {
   return s;
 }
 
+void CoreWorkload::PrepareOps(int n, bool is_loading, std::vector<WorkItem> &out) {
+  out.reserve(n);
+  if (is_loading) {
+    for (int i = 0; i < n; ++i) {
+      WorkItem item;
+      item.type = WorkItem::OpType::INSERT;
+      item.key = BuildKeyName(insert_key_sequence_->Next());
+      BuildValues(item.values);
+      out.push_back(std::move(item));
+    }
+    return;
+  }
+
+  for (int i = 0; i < n; ++i) {
+    WorkItem item;
+    switch (op_chooser_.Next()) {
+      case READ:
+        item.type = WorkItem::OpType::READ;
+        item.key = BuildKeyName(NextTransactionKeyNum());
+        break;
+      case UPDATE:
+        item.type = WorkItem::OpType::UPDATE;
+        item.key = BuildKeyName(NextTransactionKeyNum());
+        if (write_all_fields_) BuildValues(item.values);
+        else BuildSingleValue(item.values);
+        break;
+      case INSERT: {
+        item.type = WorkItem::OpType::INSERT;
+        uint64_t key_num = transaction_insert_key_sequence_->Next();
+        item.key = BuildKeyName(key_num);
+        BuildValues(item.values);
+        transaction_insert_key_sequence_->Acknowledge(key_num);
+        break;
+      }
+      case SCAN:
+        item.type = WorkItem::OpType::SCAN;
+        item.key = BuildKeyName(NextTransactionKeyNum());
+        item.scan_len = scan_len_chooser_->Next();
+        break;
+      case READMODIFYWRITE:
+        item.type = WorkItem::OpType::READMODIFYWRITE;
+        item.key = BuildKeyName(NextTransactionKeyNum());
+        if (write_all_fields_) BuildValues(item.values);
+        else BuildSingleValue(item.values);
+        break;
+      default:
+        throw utils::Exception("Operation request is not recognized!");
+    }
+    out.push_back(std::move(item));
+  }
+}
+
 DB::Status CoreWorkload::TransactionMultiKeyAcid(DB &db) {
   uint64_t first_key_num = NextTransactionKeyNum();
   uint64_t second_key_num;

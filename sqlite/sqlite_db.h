@@ -38,6 +38,10 @@ class SqliteDB : public DB {
 
   Status Delete(const std::string &table, const std::string &key);
 
+  Status BeginTransaction() override;
+  Status CommitTransaction() override;
+  Status RollbackTransaction() override;
+
   bool SupportsMultiThreadWrite() const override { return false; }
 
  private:

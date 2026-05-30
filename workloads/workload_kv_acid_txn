@@ -3,7 +3,7 @@
 # The operation count therefore represents committed transaction attempts.
 
 recordcount=100000
-operationcount=50000
+operationcount=200000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
 readallfields=true

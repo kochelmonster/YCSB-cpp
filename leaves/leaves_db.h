@@ -11,6 +11,7 @@
 #include <string>
 #include <mutex>
 #include <memory>
+#include <utility>
 #include <endian.h>
 
 #include "core/db.h"
@@ -18,6 +19,7 @@
 
 // Include Leaves database headers
 #include <leaves/leaves.hpp>
+#include <leaves/confluence.hpp>
 
 namespace ycsbc {
 
@@ -46,23 +48,30 @@ class LeavesDB : public DB {
   Status CommitTransaction();
   Status RollbackTransaction();
 
-  bool SupportsMultiThreadWrite() const override { return false; }
+  bool SupportsMultiThreadWrite() const override;
 
  private:
+  using SingleDB = leaves::TDB<leaves::MapStorage>;
+  using SingleCursor = SingleDB::Cursor;
+
   enum LeavesFormat {
     kSingleRow,
+    kConfluence,
   };
   LeavesFormat format_;
 
   // Database instance management
   static std::shared_ptr<leaves::MapStorage> storage_;
+  static std::shared_ptr<SingleDB> single_db_;
+  static std::shared_ptr<leaves::MapConfluenceDB> confluence_db_;
   static int ref_cnt_;
   static std::mutex mu_;
   
   int fieldcount_;
   std::string dbpath_;
   size_t mapsize_;
-  leaves::MapStorage::DB::Cursor cursor_;
+  SingleCursor cursor_;
+  leaves::MapConfluenceCursor confluence_cursor_;
   bool sync_;
   bool binary_key_;
   int batch_size_;
@@ -87,8 +96,16 @@ class LeavesDB : public DB {
   // Commit pending mutations if any.
   void FlushPending() {
     if (txn_active_) return;
-    if (pending_ > 0) {
-      cursor_.commit(sync_);
+    // Commit if there are pending writes OR if a transaction was started but
+    // all writes returned kNotFound (pending_==0 but _in_transaction==true).
+    bool has_open_txn = (format_ == kConfluence) &&
+                        confluence_cursor_.is_transaction_active();
+    if (pending_ > 0 || has_open_txn) {
+      if (format_ == kConfluence) {
+        confluence_cursor_.commit(sync_);
+      } else {
+        cursor_.commit(sync_);
+      }
       pending_ = 0;
     }
   }
@@ -97,8 +114,18 @@ class LeavesDB : public DB {
   void CommitMutation() {
     if (txn_active_) return;
     if (++pending_ >= batch_size_) {
-      cursor_.commit(sync_);
+      if (format_ == kConfluence) {
+        confluence_cursor_.commit(sync_);
+      } else {
+        cursor_.commit(sync_);
+      }
       pending_ = 0;
+    }
+  }
+
+  void EnsureMutationReady() {
+    if (format_ == kConfluence && !txn_active_ && pending_ == 0) {
+      confluence_cursor_.start_transaction();
     }
   }
 };

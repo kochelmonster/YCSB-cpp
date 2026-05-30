@@ -10,6 +10,10 @@
 # Insert/update/read ratio: 70/20/10
 # Request distribution: uniform
 # Threads: 8
+#
+# leaves: set mapsize large enough for 5M load + run of 3.5M inserts.
+# After LOAD the DB is ~35GB; RUN adds ~25GB more → need 128GB to be safe.
+leaves.mapsize=137438953472
 
 recordcount=5000000
 operationcount=5000000

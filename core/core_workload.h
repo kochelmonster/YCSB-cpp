@@ -181,6 +181,23 @@ class CoreWorkload {
   virtual bool DoInsert(DB &db);
   virtual bool DoTransaction(DB &db);
 
+  // Pre-generate n operations (keys + values) outside the timed window.
+  // is_loading=true uses the load-phase insert key sequence;
+  // is_loading=false uses the transaction-phase op chooser.
+  // Call this from the main thread before timer.Start(); pass the resulting
+  // vector to ClientThread so the hot loop only calls DB methods.
+  struct WorkItem {
+    enum class OpType { INSERT, UPDATE, READ, SCAN, READMODIFYWRITE };
+    OpType type;
+    std::string key;
+    Fields values;
+    int scan_len{0};
+  };
+
+  void PrepareOps(int n, bool is_loading, std::vector<WorkItem> &out);
+
+  const std::string &table_name() const { return table_name_; }
+
   bool read_all_fields() const { return read_all_fields_; }
   bool write_all_fields() const { return write_all_fields_; }
 

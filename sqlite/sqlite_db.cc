@@ -164,6 +164,21 @@ void SqliteDB::PrepareQueries() {
   stmt_delete_ = SQLite3Prepare(db_, BuildDeleteQuery(table_name_, key_));
 }
 
+DB::Status SqliteDB::BeginTransaction() {
+  int rc = sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
+  return rc == SQLITE_OK ? kOK : kError;
+}
+
+DB::Status SqliteDB::CommitTransaction() {
+  int rc = sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr);
+  return rc == SQLITE_OK ? kOK : kError;
+}
+
+DB::Status SqliteDB::RollbackTransaction() {
+  sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+  return kOK;
+}
+
 void SqliteDB::Cleanup() {
   const std::lock_guard<std::mutex> lock(mu_);
 

@@ -20,8 +20,9 @@
 
 namespace ycsbc {
 
-inline int ClientThread(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops, bool is_loading,
-                        bool init_db, bool cleanup_db, utils::CountDownLatch *latch, utils::RateLimiter *rlim) {
+inline int ClientThread(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops,
+                        bool init_db, bool cleanup_db, utils::CountDownLatch *latch, utils::RateLimiter *rlim,
+                        std::vector<ycsbc::CoreWorkload::WorkItem> *pregenerated) {
 
   try {
     if (init_db) {
@@ -29,15 +30,37 @@ inline int ClientThread(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_op
     }
 
     int ops = 0;
+
+    // Pre-generated path: hot loop contains only DB calls, no key/value generation.
+    // Pre-generation is mandatory so the measurement reflects DB cost, not framework cost.
+    Fields result_buf;
+    std::vector<Fields> scan_result_buf;
+    const std::string &table = wl->table_name();
     for (int i = 0; i < num_ops; ++i) {
       if (rlim) {
         rlim->Consume(1);
       }
-
-      if (is_loading) {
-        wl->DoInsert(*db);
-      } else {
-        wl->DoTransaction(*db);
+      auto &item = (*pregenerated)[i];
+      switch (item.type) {
+        case CoreWorkload::WorkItem::OpType::INSERT:
+          db->Insert(table, item.key, item.values);
+          break;
+        case CoreWorkload::WorkItem::OpType::UPDATE:
+          db->Update(table, item.key, item.values);
+          break;
+        case CoreWorkload::WorkItem::OpType::READ:
+          result_buf.clear();
+          db->Read(table, item.key, nullptr, result_buf);
+          break;
+        case CoreWorkload::WorkItem::OpType::SCAN:
+          scan_result_buf.clear();
+          db->Scan(table, item.key, item.scan_len, nullptr, scan_result_buf);
+          break;
+        case CoreWorkload::WorkItem::OpType::READMODIFYWRITE:
+          result_buf.clear();
+          db->Read(table, item.key, nullptr, result_buf);
+          db->Update(table, item.key, item.values);
+          break;
       }
       ops++;
     }

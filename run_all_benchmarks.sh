@@ -22,6 +22,7 @@ RESULTS_DIR="./benchmark_results"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 MATRIX_MODE="${MATRIX_MODE:-throughput}"
 LOAD_BATCH_SIZE="${LOAD_BATCH_SIZE:-64}"
+BENCHMARK_REPEATS="${BENCHMARK_REPEATS:-1}"
 
 DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite" "redis" "badger" "dragonfly")
 if [ -n "${BENCHMARK_DATABASES:-}" ]; then
@@ -54,8 +55,6 @@ SCENARIOS=(
     "acid_txn"
     "concurrent_write"
     "concurrent_session"
-    "concurrent_write_dw"
-    "concurrent_session_dw"
 )
 
 if [ -n "${BENCHMARK_SCENARIOS:-}" ]; then
@@ -88,6 +87,8 @@ ENTRY_WORKLOAD=()
 ENTRY_DB=()
 ENTRY_LOAD_FILE=()
 ENTRY_RUN_FILE=()
+ENTRY_RUN_MEDIAN_TP=()
+ENTRY_RUN_ALL_TPS=()  # space-separated list of per-repeat throughputs
 
 supports_binary_key() {
     local db=$1
@@ -107,11 +108,14 @@ supports_batch_size() {
 
 scenario_binary_key() {
     local scenario=$1
-    if [ "$scenario" = "binary_key" ]; then
-        echo "true"
-    else
-        echo "false"
-    fi
+    case "$scenario" in
+        binary_key|batch_insert_*|batch_update_*)
+            echo "true"
+            ;;
+        *)
+            echo "false"
+            ;;
+    esac
 }
 
 scenario_batch_size() {
@@ -174,7 +178,11 @@ supports_scenario() {
 
     case "$scenario" in
         acid_txn)
-            [ "$db" = "wiredtiger" ] || [ "$db" = "lmdb" ] || [ "$db" = "leaves" ]
+            [ "$db" = "wiredtiger" ] || [ "$db" = "lmdb" ] || [ "$db" = "leaves" ] || [ "$db" = "sqlite" ]
+            return
+            ;;
+        concurrent_write|concurrent_session)
+            [ "$db" != "leveldb" ] && [ "$db" != "lmdb" ]
             return
             ;;
         *)
@@ -204,6 +212,9 @@ db_mode_args() {
             wiredtiger)
                 echo "-p wiredtiger.log.enabled=true -p wiredtiger.transaction_sync.enabled=true -p wiredtiger.transaction_sync.method=fsync"
                 ;;
+            sqlite)
+                echo "-p sqlite.journal_mode=WAL -p sqlite.synchronous=FULL"
+                ;;
             *)
                 echo ""
                 ;;
@@ -219,8 +230,13 @@ scenario_db_args() {
     local phase=${3:-run}
     local binary_key
     local batch_size
+    local leaves_format="single"
     binary_key=$(scenario_binary_key "$scenario")
     batch_size=$(scenario_batch_size "$scenario")
+
+    if [ "$db" = "leaves" ] && [[ "$scenario" == concurrent_* ]]; then
+        leaves_format="confluence"
+    fi
 
     if [ "$phase" = "load" ] && supports_batch_size "$db"; then
         batch_size="$LOAD_BATCH_SIZE"
@@ -248,7 +264,11 @@ scenario_db_args() {
 
     case "$db" in
         leaves|leveldb|rocksdb|lmdb)
-            echo "-p ${db}.binary_key=${binary_key} -p ${db}.batch_size=${batch_size} ${dw_args}"
+            if [ "$db" = "leaves" ]; then
+                echo "-p ${db}.binary_key=${binary_key} -p ${db}.batch_size=${batch_size} -p leaves.format=${leaves_format} ${dw_args}"
+            else
+                echo "-p ${db}.binary_key=${binary_key} -p ${db}.batch_size=${batch_size} ${dw_args}"
+            fi
             ;;
         redis|dragonfly)
             if [ "$phase" = "load" ]; then
@@ -341,8 +361,9 @@ run_benchmark() {
     local scenario=$2
     local workload=$3
     local phase=$4
+    local repeat_suffix="${5:-}"
 
-    local output_file="$RESULTS_DIR/${db}_${scenario}_${workload}_${phase}_${TIMESTAMP}.log"
+    local output_file="$RESULTS_DIR/${db}_${scenario}_${workload}_${phase}${repeat_suffix}_${TIMESTAMP}.log"
     local properties_file="${db}/${db}.properties"
     local cmd=()
     local mode_args=()
@@ -401,7 +422,17 @@ extract_phase_throughput() {
 
     sed -n "s/^${phase_label} throughput(ops\\/sec):[[:space:]]*//p" "$file" | tail -n1
 }
-
+compute_median() {
+    # Args: one or more numbers; prints their median.
+    printf '%s\n' "$@" | sort -n | awk '
+        BEGIN { c=0 }
+        { a[c++]=$1 }
+        END {
+            if (c==0) { print ""; exit }
+            if (c%2==1) print a[int(c/2)]
+            else printf "%.6g\n", (a[c/2-1]+a[c/2])/2
+        }'
+}
 summarize_results() {
     local summary_file="$RESULTS_DIR/benchmark_summary_${TIMESTAMP}.txt"
     local i
@@ -417,6 +448,13 @@ summarize_results() {
         echo "=== ${ENTRY_DB[$i]} | ${ENTRY_SCENARIO[$i]} | ${ENTRY_WORKLOAD[$i]} ===" >> "$summary_file"
         grep -E "Load runtime|Load throughput|0 sec: .*\[INSERT:" "${ENTRY_LOAD_FILE[$i]}" >> "$summary_file" 2>/dev/null || true
         grep -E "Run runtime|Run throughput|0 sec: .*operations;" "${ENTRY_RUN_FILE[$i]}" >> "$summary_file" 2>/dev/null || true
+        if [ "$BENCHMARK_REPEATS" -gt 1 ] && [ -n "${ENTRY_RUN_ALL_TPS[$i]:-}" ]; then
+            read -r -a all_tps <<< "${ENTRY_RUN_ALL_TPS[$i]}"
+            local min_tp max_tp
+            min_tp=$(printf '%s\n' "${all_tps[@]}" | sort -n | head -1)
+            max_tp=$(printf '%s\n' "${all_tps[@]}" | sort -n | tail -1)
+            echo "Run repeats(n=${#all_tps[@]}): median=${ENTRY_RUN_MEDIAN_TP[$i]}  min=${min_tp}  max=${max_tp}  values=[${all_tps[*]}]" >> "$summary_file"
+        fi
         grep "Database size:" "${ENTRY_RUN_FILE[$i]}" >> "$summary_file" 2>/dev/null || true
         echo "" >> "$summary_file"
     done
@@ -438,7 +476,8 @@ generate_matrix_csv() {
         local load_tp
         local run_tp
         load_tp=$(extract_phase_throughput "${ENTRY_LOAD_FILE[$i]}" "Load")
-        run_tp=$(extract_phase_throughput "${ENTRY_RUN_FILE[$i]}" "Run")
+        run_tp="${ENTRY_RUN_MEDIAN_TP[$i]}"
+        [ -z "$run_tp" ] && run_tp=$(extract_phase_throughput "${ENTRY_RUN_FILE[$i]}" "Run")
 
         if [ -z "$load_tp" ] || [ -z "$run_tp" ]; then
             continue
@@ -482,10 +521,22 @@ for db in "${DATABASES[@]}"; do
             fi
             load_file="$LAST_OUTPUT_FILE"
 
-            if ! run_benchmark "$db" "$scenario" "$workload" "run"; then
-                continue
-            fi
-            run_file="$LAST_OUTPUT_FILE"
+            run_tputs=()
+            last_run_file=""
+            for ((r=1; r<=BENCHMARK_REPEATS; r++)); do
+                repeat_suffix=""
+                [ "$BENCHMARK_REPEATS" -gt 1 ] && repeat_suffix="_r${r}"
+                if ! run_benchmark "$db" "$scenario" "$workload" "run" "$repeat_suffix"; then
+                    break
+                fi
+                last_run_file="$LAST_OUTPUT_FILE"
+                tp=$(extract_phase_throughput "$last_run_file" "Run")
+                [ -n "$tp" ] && run_tputs+=("$tp")
+            done
+
+            [ -z "$last_run_file" ] && continue
+            run_file="$last_run_file"
+            median_tp=$(compute_median "${run_tputs[@]}")
 
             ENTRY_SCENARIO+=("$scenario")
             ENTRY_BATCH+=("$(scenario_batch_size "$scenario")")
@@ -494,6 +545,8 @@ for db in "${DATABASES[@]}"; do
             ENTRY_DB+=("$db")
             ENTRY_LOAD_FILE+=("$load_file")
             ENTRY_RUN_FILE+=("$run_file")
+            ENTRY_RUN_MEDIAN_TP+=("$median_tp")
+            ENTRY_RUN_ALL_TPS+=("${run_tputs[*]}")
 
             echo ""
         done

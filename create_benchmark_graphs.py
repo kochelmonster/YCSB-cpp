@@ -32,7 +32,9 @@ WORKLOAD_LABELS = {
 }
 
 ACID_WORKLOAD_LABELS = {"ACID A/C/I", "ACID Txn"}
-CONCURRENT_WORKLOAD_LABELS = {"Concurrent Write (8T)", "Concurrent Session (8T)", "Concurrent Write (8T) DW", "Concurrent Session (8T) DW"}
+CONCURRENT_WORKLOAD_LABELS = {"Concurrent Write (8T)", "Concurrent Session (8T)"}
+CONCURRENT_FASTEST_LABEL = "Concurrent Best"
+CONCURRENT_FASTEST_DATABASES = {"rocksdb", "leaves"}
 
 DATABASE_ORDER = ["leaves", "lmdb", "leveldb", "rocksdb", "wiredtiger", "sqlite", "redis", "badger", "dragonfly"]
 COLORS = {
@@ -120,8 +122,10 @@ def save_grouped_bars(
     output_path: Path,
     title: str,
     ylabel: str,
+    *,
+    sig_figs: int = 0,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(14, 7))
+    fig, ax = plt.subplots(figsize=(14, 9))
 
     x = np.arange(len(pivot.index))
     columns = ordered_columns(pivot.columns)
@@ -144,13 +148,15 @@ def save_grouped_bars(
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
                 value + max(pivot.max()) * 0.01,
-                f"{value/1000:.0f}k",
+                f"{value/1000:.{sig_figs}g}k" if sig_figs > 0 else f"{value/1000:.0f}k",
                 ha="center",
                 va="bottom",
                 fontsize=8,
                 rotation=90,
             )
 
+    # Add 20% headroom above the tallest bar so rotated labels aren't clipped.
+    ax.set_ylim(top=ax.get_ylim()[1] * 1.20)
     ax.set_title(title, fontsize=15, fontweight="bold")
     ax.set_ylabel(ylabel)
     ax.set_xticks(x)
@@ -160,6 +166,23 @@ def save_grouped_bars(
     plt.tight_layout()
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close(fig)
+
+
+def fastest_concurrent_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    concurrent = frame[frame["workload_label"].isin(CONCURRENT_WORKLOAD_LABELS)]
+    concurrent = concurrent[concurrent["database"].isin(CONCURRENT_FASTEST_DATABASES)]
+    if concurrent.empty:
+        return pd.DataFrame()
+
+    best_rows = concurrent.sort_values("run_throughput_ops_sec", ascending=False).groupby("database", as_index=False).first()
+    best_rows["workload_label"] = CONCURRENT_FASTEST_LABEL
+    return best_rows.pivot_table(
+        index="workload_label",
+        columns="database",
+        values="run_throughput_ops_sec",
+        aggfunc="max",
+        fill_value=0,
+    )
 
 
 def main() -> None:
@@ -189,7 +212,7 @@ def main() -> None:
     save_grouped_bars(
         all_run_pivot,
         comparison_chart,
-        "Workload Performance Comparison (Best Across All Scenarios)",
+        "Workload Performance Comparison (Best + Fastest Concurrent Configs)",
         "Run throughput (ops/sec)",
     )
     generated_files.append(comparison_chart)
@@ -202,7 +225,7 @@ def main() -> None:
     save_grouped_bars(
         avg_run_pivot,
         average_chart,
-        "Workload Performance Comparison (Average Across All Scenarios)",
+        "Workload Performance Comparison (Average + Fastest Concurrent Configs)",
         "Run throughput (ops/sec)",
     )
     generated_files.append(average_chart)
@@ -218,6 +241,7 @@ def main() -> None:
             acid_chart,
             "ACID Workload Performance Comparison (Best Across All Scenarios)",
             "Run throughput (ops/sec)",
+            sig_figs=3,
         )
         generated_files.append(acid_chart)
 
@@ -231,35 +255,25 @@ def main() -> None:
             acid_average_chart,
             "ACID Workload Performance Comparison (Average Across All Scenarios)",
             "Run throughput (ops/sec)",
+            sig_figs=3,
         )
         generated_files.append(acid_average_chart)
 
-    # Generate a focused concurrent-only chart for multi-threaded workloads.
+    # Dedicated concurrent chart: filter to databases that have concurrent data.
     concurrent_run_pivot = full_run_pivot.loc[
         [label for label in full_run_pivot.index if label in CONCURRENT_WORKLOAD_LABELS]
     ]
     if not concurrent_run_pivot.empty:
+        # Drop databases with no concurrent data (all zeros)
+        concurrent_run_pivot = concurrent_run_pivot.loc[:, (concurrent_run_pivot > 0).any()]
         concurrent_chart = output_dir / "concurrent_workload_comparison.png"
         save_grouped_bars(
             concurrent_run_pivot,
             concurrent_chart,
-            "Concurrent Workload Performance Comparison (8 Threads)",
+            "Concurrent Workload Performance Comparison (8 threads)",
             "Run throughput (ops/sec)",
         )
         generated_files.append(concurrent_chart)
-
-    concurrent_avg_run_pivot = full_avg_run_pivot.loc[
-        [label for label in full_avg_run_pivot.index if label in CONCURRENT_WORKLOAD_LABELS]
-    ]
-    if not concurrent_avg_run_pivot.empty:
-        concurrent_average_chart = output_dir / "concurrent_workload_comparison_average.png"
-        save_grouped_bars(
-            concurrent_avg_run_pivot,
-            concurrent_average_chart,
-            "Concurrent Workload Performance Comparison (8 Threads, Average)",
-            "Run throughput (ops/sec)",
-        )
-        generated_files.append(concurrent_average_chart)
 
     print(f"Using throughput CSV: {throughput_csv}")
     print(f"Graphs written to: {output_dir}")
