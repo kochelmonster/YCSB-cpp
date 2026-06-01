@@ -130,6 +130,22 @@ void LeavesDB::Init() {
   }
 }
 
+void LeavesDB::FlushPending() {
+  if (txn_active_) return;
+  // Commit if there are pending writes OR if a transaction is open.
+  bool has_open_txn = (format_ == kConfluence)
+                      ? confluence_cursor_.is_transaction_active()
+                      : cursor_.is_transaction_active();
+  if (pending_ > 0 || has_open_txn) {
+    if (format_ == kConfluence) {
+      confluence_cursor_.commit(sync_);
+    } else {
+      cursor_.commit(sync_);
+    }
+    pending_ = 0;
+  }
+}
+
 void LeavesDB::Cleanup() {
   FlushPending();
   const std::lock_guard<std::mutex> lock(mu_);
@@ -294,6 +310,9 @@ DB::Status LeavesDB::Update(const std::string& /*table*/, const std::string& key
       // first would invoke _materialize_write() which only checks the write
       // tributary and clears _pending_find, making the subsequent value() call
       // a no-op that misses all keys that live in the main DB.
+      // value() before is_valid(): _materialize_full() searches main DB + all
+      // tributaries AND positions the write cursor via _resolve_key(), so no
+      // second find() is needed before the write.
       confluence_cursor_.find(key_slice);
       leaves::Slice existing_value = confluence_cursor_.value();
       if (!confluence_cursor_.is_valid()) {
@@ -302,8 +321,6 @@ DB::Status LeavesDB::Update(const std::string& /*table*/, const std::string& key
       ReadonlyFields readonly(existing_value.data(), existing_value.size());
       Slice updated_data = values.update(readonly);
       leaves::Slice value_slice(updated_data.data(), updated_data.size());
-      // Re-position the cursor for the write (resets _pending_find=true).
-      confluence_cursor_.find(key_slice);
       confluence_cursor_.value(value_slice);
     } else {
       cursor_.find(key_slice);

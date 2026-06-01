@@ -50,6 +50,8 @@ class LeavesDB : public DB {
 
   bool SupportsMultiThreadWrite() const override;
 
+  void FlushPending() override;
+
  private:
   using SingleDB = leaves::TDB<leaves::MapStorage>;
   using SingleCursor = SingleDB::Cursor;
@@ -91,23 +93,6 @@ class LeavesDB : public DB {
     uint64_t be = htobe64(n);
     std::memcpy(key_buf_, &be, 8);
     return leaves::Slice(key_buf_, 8);
-  }
-
-  // Commit pending mutations if any.
-  void FlushPending() {
-    if (txn_active_) return;
-    // Commit if there are pending writes OR if a transaction was started but
-    // all writes returned kNotFound (pending_==0 but _in_transaction==true).
-    bool has_open_txn = (format_ == kConfluence) &&
-                        confluence_cursor_.is_transaction_active();
-    if (pending_ > 0 || has_open_txn) {
-      if (format_ == kConfluence) {
-        confluence_cursor_.commit(sync_);
-      } else {
-        cursor_.commit(sync_);
-      }
-      pending_ = 0;
-    }
   }
 
   // Record one mutation; commit when batch is full.

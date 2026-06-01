@@ -30,3 +30,19 @@ leaves.binary_key=true
 lmdb.binary_key=true
 leveldb.binary_key=true
 rocksdb.binary_key=true
+
+# RocksDB / LevelDB: increase block cache to cover the full 1M-record dataset (~1GB).
+# Default 512MB gives ~50% hit rate; 1GB captures the entire working set.
+rocksdb.cache_size=1073741824
+leveldb.cache_size=1073741824
+
+# WiredTiger: switch from LSM to BTree.
+# 50/50 read/update with zipfian — BTree in-place updates avoid LSM write
+# amplification, and point reads need no bloom-filter fan-out across levels.
+# Clear all LSM config properties (empty value → !empty() guard skips them).
+wiredtiger.blk_mgr.bloom_bit_count=
+wiredtiger.blk_mgr.bloom_hash_count=
+wiredtiger.blk_mgr.chunk_max=
+wiredtiger.blk_mgr.chunk_size=
+wiredtiger.lsm_mgr.merge=
+wiredtiger.lsm_mgr.max_workers=

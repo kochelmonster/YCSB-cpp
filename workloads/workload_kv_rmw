@@ -20,3 +20,20 @@ insertproportion=0
 readmodifywriteproportion=0.50
 
 requestdistribution=zipfian
+
+# RocksDB / LevelDB: increase block cache to cover the full 1M-record dataset (~1GB).
+# RMW reads occur on 50% of operations; 1GB cache eliminates read I/O for the
+# entire working set vs 512MB which only covers ~50%.
+rocksdb.cache_size=1073741824
+leveldb.cache_size=1073741824
+
+# WiredTiger: switch from LSM to BTree.
+# 50% RMW — every operation touches storage. BTree in-place updates avoid
+# LSM write amplification, and point reads need no bloom-filter fan-out.
+# Clear all LSM config properties (empty value → !empty() guard skips them).
+wiredtiger.blk_mgr.bloom_bit_count=
+wiredtiger.blk_mgr.bloom_hash_count=
+wiredtiger.blk_mgr.chunk_max=
+wiredtiger.blk_mgr.chunk_size=
+wiredtiger.lsm_mgr.merge=
+wiredtiger.lsm_mgr.max_workers=

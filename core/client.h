@@ -65,6 +65,10 @@ inline int ClientThread(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_op
       ops++;
     }
 
+    // Flush any pending writes (e.g. partial batch) so locks are released
+    // before this thread exits, even if cleanup_db is false.
+    db->FlushPending();
+
     if (cleanup_db) {
       db->Cleanup();
     }

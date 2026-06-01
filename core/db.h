@@ -43,6 +43,12 @@ class DB {
   ///
   virtual void Cleanup() { }
   ///
+  /// Flushes any pending writes without closing the DB.
+  /// Called at the end of each client thread's work to ensure partial batches
+  /// are committed before the thread exits (prevents lock leaks on shared DBs).
+  ///
+  virtual void FlushPending() { }
+  ///
   /// Begins an explicit transaction if supported.
   ///
   virtual Status BeginTransaction() { return kNotImplemented; }
