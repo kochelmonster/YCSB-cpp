@@ -249,10 +249,28 @@ if (BIND_BADGER)
     file(GLOB_RECURSE YCSB_BADGER_SRC "badger/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_BADGER_SRC})
 
-    find_library(CBADGER_LIB cbadger PATHS ${PROJECT_SOURCE_DIR}/badger/cbadger REQUIRED)
-    target_link_libraries(ycsb PRIVATE ${CBADGER_LIB})
+    set(CBADGER_DIR ${PROJECT_SOURCE_DIR}/badger/cbadger)
+    set(CBADGER_LIB_PATH ${CBADGER_DIR}/libcbadger.a)
+
+    # Add a custom command to build the Go library
+    add_custom_command(
+        OUTPUT ${CBADGER_LIB_PATH}
+        COMMAND go build -buildmode=c-archive -o ${CBADGER_LIB_PATH}
+        WORKING_DIRECTORY ${CBADGER_DIR}
+        COMMENT "Building cbadger Go library"
+        VERBATIM
+    )
+
+    # Create a custom target for the Go library
+    add_custom_target(cbadger_build DEPENDS ${CBADGER_LIB_PATH})
+
+    # Add a dependency to ensure cbadger is built before ycsb
+    add_dependencies(ycsb cbadger_build)
+
+    # Link the library that will be built by the custom command
+    target_link_libraries(ycsb PRIVATE ${CBADGER_LIB_PATH})
     target_include_directories(ycsb PRIVATE ${PROJECT_SOURCE_DIR}/badger)
-    message(STATUS "Found BadgerDB CGo library")
+    message(STATUS "Configured BadgerDB CGo library build")
 else()
     message(STATUS "BIND_BADGER - OFF")
 endif()
