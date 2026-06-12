@@ -258,7 +258,7 @@ def main() -> None:
         [label for label in full_avg_run_pivot.index if label in ACID_WORKLOAD_LABELS]
     ]
     if not acid_avg_run_pivot.empty:
-        acid_average_chart = output_dir / "acid_workload_comparision_average.png"
+        acid_average_chart = output_dir / "acid_workload_comparison_average.png"
         save_grouped_bars(
             acid_avg_run_pivot,
             acid_average_chart,
@@ -285,6 +285,22 @@ def main() -> None:
         )
         save_pivot_csv(concurrent_run_pivot, concurrent_chart)
         generated_files.append(concurrent_chart)
+
+    concurrent_avg_run_pivot = full_avg_run_pivot.loc[
+        [label for label in full_avg_run_pivot.index if label in CONCURRENT_WORKLOAD_LABELS]
+    ]
+    if not concurrent_avg_run_pivot.empty:
+        # Drop databases with no concurrent data (all zeros)
+        concurrent_avg_run_pivot = concurrent_avg_run_pivot.loc[:, (concurrent_avg_run_pivot > 0).any()]
+        concurrent_average_chart = output_dir / "concurrent_workload_comparison_average.png"
+        save_grouped_bars(
+            concurrent_avg_run_pivot,
+            concurrent_average_chart,
+            "Concurrent Workload Performance Comparison (8 threads, Average)",
+            "Run throughput (ops/sec)",
+        )
+        save_pivot_csv(concurrent_avg_run_pivot, concurrent_average_chart)
+        generated_files.append(concurrent_average_chart)
 
     print(f"Using throughput CSV: {throughput_csv}")
     print(f"Graphs written to: {output_dir}")
