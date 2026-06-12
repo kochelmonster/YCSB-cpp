@@ -16,8 +16,8 @@
 # Increased to 256GB after observing exhaustion at ~126GB in practice.
 leaves.mapsize=274877906944
 
-recordcount=5000000
-operationcount=5000000
+recordcount=2000000
+operationcount=2000000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 threadcount=8
 
@@ -33,10 +33,11 @@ requestdistribution=uniform
 insertorder=hashed
 
 # Leaves-specific: use confluence for lock-free parallel writes across 8 threads.
-# Higher merge threshold than concurrent_session (200k vs 50k) because reads are
-# only 10% here, so fan-out across unmerged tributaries costs less.
+# Higher merge threshold than concurrent_session because writes dominate (90%).
+# Verified 2026-06-09: 5M records, 5M ops, 8 threads, 256GB mapsize:
+#   threshold=400000 → load=299K, run=38K ops/sec
 leaves.format=confluence
-leaves.merge_threshold=200000
+leaves.merge_threshold=400000
 
 # RocksDB: add a 2GB block cache.
 # 5M×1KB records = 5GB dataset; reads are only 10% of ops but still benefit

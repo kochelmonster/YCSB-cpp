@@ -117,6 +117,12 @@ def prepare_matrix(csv_path: Path) -> pd.DataFrame:
     return frame
 
 
+def save_pivot_csv(pivot: pd.DataFrame, output_path: Path) -> None:
+    """Save a pivot DataFrame as a CSV file alongside the graph."""
+    csv_path = output_path.with_suffix(".csv")
+    pivot.to_csv(csv_path)
+
+
 def save_grouped_bars(
     pivot: pd.DataFrame,
     output_path: Path,
@@ -215,6 +221,7 @@ def main() -> None:
         "Workload Performance Comparison (Best + Fastest Concurrent Configs)",
         "Run throughput (ops/sec)",
     )
+    save_pivot_csv(all_run_pivot, comparison_chart)
     generated_files.append(comparison_chart)
 
     full_avg_run_pivot = throughput_df_all.groupby(["workload_label", "database"])["run_throughput_ops_sec"].mean().unstack(fill_value=0)
@@ -228,6 +235,7 @@ def main() -> None:
         "Workload Performance Comparison (Average + Fastest Concurrent Configs)",
         "Run throughput (ops/sec)",
     )
+    save_pivot_csv(avg_run_pivot, average_chart)
     generated_files.append(average_chart)
 
     # Generate a focused acid-only chart so low-throughput bars are readable.
@@ -243,6 +251,7 @@ def main() -> None:
             "Run throughput (ops/sec)",
             sig_figs=3,
         )
+        save_pivot_csv(acid_run_pivot, acid_chart)
         generated_files.append(acid_chart)
 
     acid_avg_run_pivot = full_avg_run_pivot.loc[
@@ -257,6 +266,7 @@ def main() -> None:
             "Run throughput (ops/sec)",
             sig_figs=3,
         )
+        save_pivot_csv(acid_avg_run_pivot, acid_average_chart)
         generated_files.append(acid_average_chart)
 
     # Dedicated concurrent chart: filter to databases that have concurrent data.
@@ -273,6 +283,7 @@ def main() -> None:
             "Concurrent Workload Performance Comparison (8 threads)",
             "Run throughput (ops/sec)",
         )
+        save_pivot_csv(concurrent_run_pivot, concurrent_chart)
         generated_files.append(concurrent_chart)
 
     print(f"Using throughput CSV: {throughput_csv}")

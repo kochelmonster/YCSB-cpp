@@ -11,8 +11,8 @@
 # Request distribution: zipfian
 # Threads: 8
 
-recordcount=5000000
-operationcount=5000000
+recordcount=2000000
+operationcount=2000000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 threadcount=8
 
@@ -27,10 +27,7 @@ readmodifywriteproportion=0
 requestdistribution=zipfian
 
 # Leaves-specific: keep tributaries small so N-way reads stay cheap.
-# At threshold=1000000 (default) tributaries never merge during the benchmark
-# (only ~310k updates/thread in 80s), causing 9x read fanout overhead.
-# 50000 is the empirically measured sweet spot for this workload.
-leaves.merge_threshold=50000
+leaves.merge_threshold=75000
 leaves.format=confluence
 
 # RocksDB: enlarge block cache from 512MB to 2GB.

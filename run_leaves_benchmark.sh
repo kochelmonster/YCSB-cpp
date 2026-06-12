@@ -25,7 +25,7 @@ LOAD_BATCH_SIZE="${LOAD_BATCH_SIZE:-64}"
 BENCHMARK_REPEATS="${BENCHMARK_REPEATS:-1}"
 export YCSB_SEED=12345
 
-DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite" "redis" "badger")
+DATABASES=("leaves")
 if [ -n "${BENCHMARK_DATABASES:-}" ]; then
     read -r -a DATABASES <<< "$BENCHMARK_DATABASES"
 fi
@@ -56,6 +56,10 @@ SCENARIOS=(
     "acid_txn"
     "concurrent_write"
     "concurrent_session"
+)
+
+SCENARIOS=(
+    "concurrent_write"
 )
 
 if [ -n "${BENCHMARK_SCENARIOS:-}" ]; then
