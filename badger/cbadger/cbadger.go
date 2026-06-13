@@ -12,9 +12,10 @@ import (
 )
 
 //export badger_open
-func badger_open(path *C.char, db_out *C.badger_db_t) C.int {
+func badger_open(path *C.char, sync_writes C.int, db_out *C.badger_db_t) C.int {
 	opts := badger.DefaultOptions(C.GoString(path))
 	opts.Logger = nil // suppress badger logs
+	opts.SyncWrites = sync_writes != 0
 	db, err := badger.Open(opts)
 	if err != nil {
 		return C.BADGER_ERR

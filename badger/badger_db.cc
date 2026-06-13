@@ -19,6 +19,9 @@ namespace {
 
   const std::string PROP_BINARY_KEY = "badger.binary_key";
   const std::string PROP_BINARY_KEY_DEFAULT = "false";
+
+  const std::string PROP_SYNC_WRITES = "badger.sync_writes";
+  const std::string PROP_SYNC_WRITES_DEFAULT = "false";
 } // anonymous
 
 namespace ycsbc {
@@ -31,6 +34,7 @@ void BadgerDB::Init() {
   const utils::Properties &props = *props_;
 
   binary_key_ = props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
+  sync_writes_ = props.GetProperty(PROP_SYNC_WRITES, PROP_SYNC_WRITES_DEFAULT) == "true";
 
   const std::lock_guard<std::mutex> lock(mutex_);
 
@@ -43,7 +47,7 @@ void BadgerDB::Init() {
     throw utils::Exception("BadgerDB db path is missing");
   }
 
-  int ret = badger_open(const_cast<char *>(db_path.c_str()), &db_);
+  int ret = badger_open(const_cast<char *>(db_path.c_str()), sync_writes_, &db_);
   if (ret != BADGER_OK) {
     throw utils::Exception("BadgerDB: failed to open database at " + db_path);
   }

@@ -20,7 +20,7 @@ typedef void* badger_iter_t;
 #define BADGER_NOT_FOUND    2
 
 /* Open/close */
-int badger_open(char *path, badger_db_t *db_out);
+int badger_open(char *path, int sync_writes, badger_db_t *db_out);
 void badger_close(badger_db_t db);
 
 /* Single-key operations (use internal transactions) */

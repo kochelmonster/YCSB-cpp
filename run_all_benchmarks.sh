@@ -161,12 +161,6 @@ scenario_workloads() {
         concurrent_session)
             echo "workload_kv_concurrent_session"
             ;;
-        concurrent_write_dw)
-            echo "workload_kv_concurrent_write"
-            ;;
-        concurrent_session_dw)
-            echo "workload_kv_concurrent_session"
-            ;;
         *)
             echo "${BASE_WORKLOADS[*]}"
             ;;
@@ -179,7 +173,7 @@ supports_scenario() {
 
     case "$scenario" in
         acid_txn)
-            [ "$db" = "wiredtiger" ] || [ "$db" = "lmdb" ] || [ "$db" = "leaves" ] || [ "$db" = "sqlite" ]
+            [ "$db" = "wiredtiger" ] || [ "$db" = "lmdb" ] || [ "$db" = "leaves" ] || [ "$db" = "sqlite" ] || [ "$db" = "badger" ]
             return
             ;;
         concurrent_write|concurrent_session)
@@ -215,6 +209,9 @@ db_mode_args() {
                 ;;
             sqlite)
                 echo "-p sqlite.journal_mode=WAL -p sqlite.synchronous=FULL"
+                ;;
+            badger)
+                echo "-p badger.sync_writes=true"
                 ;;
             *)
                 echo ""

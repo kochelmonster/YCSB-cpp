@@ -40,8 +40,11 @@ class BadgerDB : public DB {
 
   Status Delete(const std::string &table, const std::string &key);
 
+  bool SupportsMultiThreadWrite() { return true; }
+
  private:
   bool binary_key_;
+  bool sync_writes_;
   char key_buf_[8];
 
   std::string EncodeKey(const std::string &key) {
