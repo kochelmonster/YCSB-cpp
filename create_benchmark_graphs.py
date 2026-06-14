@@ -243,6 +243,7 @@ def main() -> None:
         [label for label in full_run_pivot.index if label in ACID_WORKLOAD_LABELS]
     ]
     if not acid_run_pivot.empty:
+        acid_run_pivot = acid_run_pivot.loc[:, (acid_run_pivot > 0).any()]
         acid_chart = output_dir / "acid_workload_comparison.png"
         save_grouped_bars(
             acid_run_pivot,
@@ -258,6 +259,7 @@ def main() -> None:
         [label for label in full_avg_run_pivot.index if label in ACID_WORKLOAD_LABELS]
     ]
     if not acid_avg_run_pivot.empty:
+        acid_avg_run_pivot = acid_avg_run_pivot.loc[:, (acid_avg_run_pivot > 0).any()]
         acid_average_chart = output_dir / "acid_workload_comparison_average.png"
         save_grouped_bars(
             acid_avg_run_pivot,

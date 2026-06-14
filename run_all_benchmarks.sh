@@ -172,7 +172,7 @@ supports_scenario() {
     local scenario=$2
 
     case "$scenario" in
-        acid_txn)
+        acid_txn|acid_aci)
             [ "$db" = "wiredtiger" ] || [ "$db" = "lmdb" ] || [ "$db" = "leaves" ] || [ "$db" = "sqlite" ] || [ "$db" = "badger" ]
             return
             ;;
