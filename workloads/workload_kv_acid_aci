@@ -19,3 +19,5 @@ insertproportion=0
 readmodifywriteproportion=0.40
 
 requestdistribution=zipfian
+insertorder=hashed
+hashalgo=sha256

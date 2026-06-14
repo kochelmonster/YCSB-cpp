@@ -21,6 +21,7 @@ readmodifywriteproportion=0
 
 requestdistribution=uniform
 insertorder=hashed
+hashalgo=sha256
 
 # Default batching and binary keys for maximum throughput
 leaves.batch_size=64

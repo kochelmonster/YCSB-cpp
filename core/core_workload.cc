@@ -15,6 +15,7 @@
 #include "core_workload.h"
 #include "random_byte_generator.h"
 #include "utils/utils.h"
+#include "utils/sha256.h"
 
 #include <algorithm>
 #include <random>
@@ -98,6 +99,9 @@ const string CoreWorkload::SCAN_LENGTH_DISTRIBUTION_DEFAULT = "uniform";
 const string CoreWorkload::INSERT_ORDER_PROPERTY = "insertorder";
 const string CoreWorkload::INSERT_ORDER_DEFAULT = "hashed";
 
+const string CoreWorkload::HASH_ALGO_PROPERTY = "hashalgo";
+const string CoreWorkload::HASH_ALGO_DEFAULT = "fnv";
+
 const string CoreWorkload::INSERT_START_PROPERTY = "insertstart";
 const string CoreWorkload::INSERT_START_DEFAULT = "0";
 
@@ -159,6 +163,8 @@ void CoreWorkload::Init(const utils::Properties &p) {
   } else {
     ordered_inserts_ = true;
   }
+
+  hash_algo_ = p.GetProperty(HASH_ALGO_PROPERTY, HASH_ALGO_DEFAULT);
 
 
   if (read_proportion > 0) {
@@ -232,7 +238,14 @@ ycsbc::Generator<uint64_t> *CoreWorkload::GetFieldLenGenerator(
 
 std::string CoreWorkload::BuildKeyName(uint64_t key_num) {
   if (!ordered_inserts_) {
-    key_num = utils::Hash(key_num);
+    if (hash_algo_ == "sha256") {
+      char num_buf[32];
+      snprintf(num_buf, sizeof(num_buf), "%lu", key_num);
+      tl_key_buffer = sha256(std::string(num_buf));
+      return tl_key_buffer;
+    } else { // fnv
+      key_num = utils::Hash(key_num);
+    }
   }
   
   // Build key directly in thread-local buffer to avoid allocations

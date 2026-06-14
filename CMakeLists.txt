@@ -51,6 +51,7 @@ option(WITH_ZSTD "linking YCSB with zstd" OFF)
 option(WITH_BZ2 "linking YCSB with bzip2" OFF)
 
 file(GLOB_RECURSE YCSB_CORE_SRC "core/*.cc")
+list(APPEND YCSB_CORE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/utils/sha256.cpp")
 file(GLOB_RECURSE YCSB_NULL_SRC "null/*.cc")
 
 include(FindThreads)

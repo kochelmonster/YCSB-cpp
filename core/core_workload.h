@@ -152,6 +152,9 @@ class CoreWorkload {
   static const std::string INSERT_ORDER_PROPERTY;
   static const std::string INSERT_ORDER_DEFAULT;
 
+  static const std::string HASH_ALGO_PROPERTY;
+  static const std::string HASH_ALGO_DEFAULT;
+
   static const std::string INSERT_START_PROPERTY;
   static const std::string INSERT_START_DEFAULT;
 
@@ -247,6 +250,7 @@ class CoreWorkload {
   CounterGenerator *insert_key_sequence_; // load insert key gen
   AcknowledgedCounterGenerator *transaction_insert_key_sequence_; // transaction insert key gen
   bool ordered_inserts_;
+  std::string hash_algo_;
   size_t record_count_;
   int zero_padding_;
   bool explicit_transaction_mode_;

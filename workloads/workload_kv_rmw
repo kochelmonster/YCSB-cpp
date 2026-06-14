@@ -20,6 +20,8 @@ insertproportion=0
 readmodifywriteproportion=0.50
 
 requestdistribution=zipfian
+insertorder=hashed
+hashalgo=sha256
 
 # RocksDB / LevelDB: increase block cache to cover the full 1M-record dataset (~1GB).
 # RMW reads occur on 50% of operations; 1GB cache eliminates read I/O for the

@@ -20,6 +20,8 @@ insertproportion=0
 readmodifywriteproportion=0
 
 requestdistribution=zipfian
+insertorder=hashed
+hashalgo=sha256
 
 # Batching and binary keys for maximum throughput
 leaves.batch_size=64
