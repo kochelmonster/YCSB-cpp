@@ -269,7 +269,7 @@ DB::Status WTDB::RollbackTransaction() {
   return kOK;
 }
 
-DB::Status WTDB::ReadSingleEntry(const std::string &table, const std::string &key,
+DB::Status WTDB::ReadSingleEntry(const std::string &table, Slice key,
                                       const std::unordered_set<std::string> *fields,
                                       Fields &result) {
   WT_ITEM k = {key.data(), key.size()};
@@ -292,7 +292,7 @@ DB::Status WTDB::ReadSingleEntry(const std::string &table, const std::string &ke
   return kOK;
 }
 
-DB::Status WTDB::ScanSingleEntry(const std::string &table, const std::string &key, int len,
+DB::Status WTDB::ScanSingleEntry(const std::string &table, Slice key, int len,
                                       const std::unordered_set<std::string> *fields,
                                       std::vector<Fields> &result) {
   WT_ITEM k = {key.data(), key.size()};
@@ -327,8 +327,8 @@ DB::Status WTDB::ScanSingleEntry(const std::string &table, const std::string &ke
   return kOK;
 }
 
-DB::Status WTDB::UpdateSingleEntry(const std::string &table, const std::string &key,
-                           Fields &values){
+DB::Status WTDB::UpdateSingleEntry(const std::string &table, Slice key,
+                           const ReadonlyFields &values){
   Fields current_values;
   WT_ITEM k = {key.data(), key.size()};
   WT_ITEM v;
@@ -361,12 +361,12 @@ DB::Status WTDB::UpdateSingleEntry(const std::string &table, const std::string &
   return kOK;
 }
 
-DB::Status WTDB::InsertSingleEntry(const std::string &table, const std::string &key,
-                           Fields &values){
+DB::Status WTDB::InsertSingleEntry(const std::string &table, Slice key,
+                           const ReadonlyFields &values){
   WT_ITEM k = {key.data(), key.size()}, v;
   
   cursor_->set_key(cursor_, &k);
-  const std::string& data = values.buffer();
+  std::string data = values.data().ToString();
   v.data = data.data();
   v.size = data.size();
   cursor_->set_value(cursor_, &v);
@@ -374,7 +374,7 @@ DB::Status WTDB::InsertSingleEntry(const std::string &table, const std::string &
   // TODO: cursor reset?
   return kOK;
 }
-DB::Status WTDB::DeleteSingleEntry(const std::string &table, const std::string &key){
+DB::Status WTDB::DeleteSingleEntry(const std::string &table, Slice key){
   WT_ITEM k = {key.data(), key.size()};
   cursor_->set_key(cursor_, &k);
   error_check(cursor_->remove(cursor_));

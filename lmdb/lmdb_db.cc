@@ -177,10 +177,10 @@ DB::Status LmdbDB::RollbackTransaction() {
   return kOK;
 }
 
-DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const std::unordered_set<std::string> *fields,
-                        Fields &result) {
+DB::Status LmdbDB::Read(const std::string &table, Slice key, const std::unordered_set<std::string> *fields,
+                          Fields &result) {
   DB::Status s = kOK;
-  MDB_val key_slice = EncodeKey(key);
+  MDB_val key_slice = EncodeKey(key.ToString());
   MDB_val val_slice;
   int ret;
 
@@ -226,14 +226,14 @@ DB::Status LmdbDB::Read(const std::string &table, const std::string &key, const 
   return s;
 }
 
-DB::Status LmdbDB::Scan(const std::string &table, const std::string &key, int len,
-                        const std::unordered_set<std::string> *fields,
-                        std::vector<Fields> &result) {
+DB::Status LmdbDB::Scan(const std::string &table, Slice key, int len,
+                          const std::unordered_set<std::string> *fields,
+                          std::vector<Fields> &result) {
   DB::Status s = kOK;
   FlushBatch();
   MDB_txn *txn;
   MDB_cursor *cursor;
-  MDB_val key_slice = EncodeKey(key);
+  MDB_val key_slice = EncodeKey(key.ToString());
   MDB_val val_slice;
 
   int ret;
@@ -270,9 +270,9 @@ cleanup:
   return s;
 }
 
-DB::Status LmdbDB::Update(const std::string &table, const std::string &key, Fields &values) {
+DB::Status LmdbDB::Update(const std::string &table, Slice key, const ReadonlyFields &values) {
   FlushBatch();
-  MDB_val key_slice = EncodeKey(key);
+  MDB_val key_slice = EncodeKey(key.ToString());
   MDB_val val_slice;
 
   if (!write_txn_) {
@@ -287,7 +287,9 @@ DB::Status LmdbDB::Update(const std::string &table, const std::string &key, Fiel
   ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
   current_values = readonly;
   
-  Slice updated_data = current_values.update(values);
+  Fields new_values;
+  new_values = const_cast<ReadonlyFields&>(values);
+  Slice updated_data = current_values.update(new_values);
 
   val_slice.mv_data = const_cast<char *>(updated_data.data());
   val_slice.mv_size = updated_data.size();
@@ -299,9 +301,11 @@ DB::Status LmdbDB::Update(const std::string &table, const std::string &key, Fiel
   return kOK;
 }
 
-DB::Status LmdbDB::Insert(const std::string &table, const std::string &key, Fields &values) {
-  MDB_val key_slice = EncodeKey(key);
-  const std::string& data = values.buffer();
+DB::Status LmdbDB::Insert(const std::string &table, Slice key, const ReadonlyFields &values) {
+  MDB_val key_slice = EncodeKey(key.ToString());
+  Fields new_values;
+  new_values = const_cast<ReadonlyFields&>(values);
+  const std::string &data = new_values.buffer();
   MDB_val val_slice;
   val_slice.mv_data = static_cast<void *>(const_cast<char *>(data.data()));
   val_slice.mv_size = data.size();
@@ -316,8 +320,8 @@ DB::Status LmdbDB::Insert(const std::string &table, const std::string &key, Fiel
   return kOK;
 }
 
-DB::Status LmdbDB::Delete(const std::string &table, const std::string &key) {
-  MDB_val key_slice = EncodeKey(key);
+DB::Status LmdbDB::Delete(const std::string &table, Slice key) {
+  MDB_val key_slice = EncodeKey(key.ToString());
 
   if (!write_txn_) {
     int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);

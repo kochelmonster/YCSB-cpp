@@ -28,17 +28,17 @@ class BadgerDB : public DB {
   void Init();
   void Cleanup();
 
-  Status Read(const std::string &table, const std::string &key,
-              const std::unordered_set<std::string> *fields, Fields &result);
+  Status Read(const std::string &table, Slice key,
+               const std::unordered_set<std::string> *fields, Fields &result) override;
 
-  Status Scan(const std::string &table, const std::string &key, int len,
-              const std::unordered_set<std::string> *fields, std::vector<Fields> &result);
+  Status Scan(const std::string &table, Slice key, int len,
+               const std::unordered_set<std::string> *fields, std::vector<Fields> &result) override;
 
-  Status Update(const std::string &table, const std::string &key, Fields &values);
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values) override;
 
-  Status Insert(const std::string &table, const std::string &key, Fields &values);
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values) override;
 
-  Status Delete(const std::string &table, const std::string &key);
+  Status Delete(const std::string &table, Slice key) override;
 
   bool SupportsMultiThreadWrite() { return true; }
 
@@ -47,9 +47,9 @@ class BadgerDB : public DB {
   bool sync_writes_;
   char key_buf_[8];
 
-  std::string EncodeKey(const std::string &key) {
+  std::string EncodeKey(Slice key) {
     if (!binary_key_) {
-      return key;
+      return key.ToString();
     }
     uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
     uint64_t be = htobe64(n);

@@ -60,8 +60,8 @@ void RedisDB::Cleanup() {
   }
 }
 
-std::string RedisDB::BuildRedisKey(const std::string &table, const std::string &key) {
-  return table + ":" + key;
+std::string RedisDB::BuildRedisKey(const std::string &table, Slice key) {
+  return table + ":" + key.ToString();
 }
 
 std::string RedisDB::BuildIndexKey(const std::string &table) {
@@ -143,31 +143,31 @@ DB::Status RedisDB::ReadHashFields(const std::string &redis_key,
   return status;
 }
 
-DB::Status RedisDB::IndexKey(const std::string &table, const std::string &key) {
+DB::Status RedisDB::IndexKey(const std::string &table, Slice key) {
   const std::string index_key = BuildIndexKey(table);
-  redisReply *reply = (redisReply *)redisCommand(context_, "ZADD %s 0 %s", index_key.c_str(), key.c_str());
+  redisReply *reply = (redisReply *)redisCommand(context_, "ZADD %s 0 %b", index_key.c_str(), key.data(), key.size());
   CheckReply(reply);
   freeReplyObject(reply);
   return kOK;
 }
 
-DB::Status RedisDB::DeindexKey(const std::string &table, const std::string &key) {
+DB::Status RedisDB::DeindexKey(const std::string &table, Slice key) {
   const std::string index_key = BuildIndexKey(table);
-  redisReply *reply = (redisReply *)redisCommand(context_, "ZREM %s %s", index_key.c_str(), key.c_str());
+  redisReply *reply = (redisReply *)redisCommand(context_, "ZREM %s %b", index_key.c_str(), key.data(), key.size());
   CheckReply(reply);
   freeReplyObject(reply);
   return kOK;
 }
 
-DB::Status RedisDB::Read(const std::string &table, const std::string &key,
+DB::Status RedisDB::Read(const std::string &table, Slice key,
                          const std::unordered_set<std::string> *fields, Fields &result) {
   return ReadHashFields(BuildRedisKey(table, key), fields, result);
 }
 
-DB::Status RedisDB::Scan(const std::string &table, const std::string &key, int len,
+DB::Status RedisDB::Scan(const std::string &table, Slice key, int len,
                          const std::unordered_set<std::string> *fields, std::vector<Fields> &result) {
   const std::string index_key = BuildIndexKey(table);
-  const std::string start = "[" + key;
+  const std::string start = "[" + key.ToString();
 
   redisReply *reply = (redisReply *)redisCommand(
       context_, "ZRANGEBYLEX %s %s + LIMIT 0 %d", index_key.c_str(), start.c_str(), len);
@@ -193,7 +193,7 @@ DB::Status RedisDB::Scan(const std::string &table, const std::string &key, int l
   return result.empty() ? kNotFound : kOK;
 }
 
-DB::Status RedisDB::Update(const std::string &table, const std::string &key, Fields &values) {
+DB::Status RedisDB::Update(const std::string &table, Slice key, const ReadonlyFields &values) {
   std::string redis_key = BuildRedisKey(table, key);
   
   // Build HMSET command
@@ -229,12 +229,12 @@ DB::Status RedisDB::Update(const std::string &table, const std::string &key, Fie
   return status;
 }
 
-DB::Status RedisDB::Insert(const std::string &table, const std::string &key, Fields &values) {
+DB::Status RedisDB::Insert(const std::string &table, Slice key, const ReadonlyFields &values) {
   // In Redis, INSERT is the same as UPDATE (HMSET creates if not exists)
   return Update(table, key, values);
 }
 
-DB::Status RedisDB::Delete(const std::string &table, const std::string &key) {
+DB::Status RedisDB::Delete(const std::string &table, Slice key) {
   std::string redis_key = BuildRedisKey(table, key);
   
   redisReply *reply = (redisReply *)redisCommand(context_, "DEL %s", redis_key.c_str());

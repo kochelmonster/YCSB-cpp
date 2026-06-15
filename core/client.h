@@ -14,15 +14,15 @@
 
 #include "db.h"
 #include "core_workload.h"
+#include "core/dataset.h"
 #include "utils/countdown_latch.h"
 #include "utils/rate_limit.h"
 #include "utils/utils.h"
 
 namespace ycsbc {
 
-inline int ClientThread(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops,
-                        bool init_db, bool cleanup_db, utils::CountDownLatch *latch, utils::RateLimiter *rlim,
-                        std::vector<ycsbc::CoreWorkload::WorkItem> *pregenerated) {
+inline int ClientThread(ycsbc::DB *db, CoreWorkload *wl, const int num_ops, bool init_db, bool cleanup_db,
+                        utils::CountDownLatch *latch, utils::RateLimiter *rlim, ycsbc::Dataset *dataset) {
 
   try {
     if (init_db) {
@@ -37,16 +37,17 @@ inline int ClientThread(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_op
     std::vector<Fields> scan_result_buf;
     const std::string &table = wl->table_name();
     for (int i = 0; i < num_ops; ++i) {
-      if (rlim) {
-        rlim->Consume(1);
-      }
-      auto &item = (*pregenerated)[i];
-      switch (item.type) {
+        if (rlim) {
+          rlim->Consume(1);
+        }
+        const auto& item = dataset->Next();
+        const auto& values = item.values;
+        switch (item.type) {
         case CoreWorkload::WorkItem::OpType::INSERT:
-          db->Insert(table, item.key, item.values);
+          db->Insert(table, item.key, values);
           break;
         case CoreWorkload::WorkItem::OpType::UPDATE:
-          db->Update(table, item.key, item.values);
+          db->Update(table, item.key, values);
           break;
         case CoreWorkload::WorkItem::OpType::READ:
           result_buf.clear();
@@ -59,9 +60,9 @@ inline int ClientThread(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_op
         case CoreWorkload::WorkItem::OpType::READMODIFYWRITE:
           result_buf.clear();
           db->Read(table, item.key, nullptr, result_buf);
-          db->Update(table, item.key, item.values);
+          db->Update(table, item.key, values);
           break;
-      }
+        }
       ops++;
     }
 

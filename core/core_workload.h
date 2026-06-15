@@ -20,8 +20,11 @@
 #include "acknowledged_counter_generator.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
+#include "utils/fields.h"
 
 namespace ycsbc {
+
+class Dataset;
 
 enum Operation {
   INSERT = 0,
@@ -192,12 +195,13 @@ class CoreWorkload {
   struct WorkItem {
     enum class OpType { INSERT, UPDATE, READ, SCAN, READMODIFYWRITE };
     OpType type;
-    std::string key;
-    Fields values;
+    Slice key;
+    ReadonlyFields values;
     int scan_len{0};
   };
 
-  void PrepareOps(int n, bool is_loading, std::vector<WorkItem> &out);
+  void PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading);
+  void PrepareOps(Dataset &dataset, bool is_loading);
 
   const std::string &table_name() const { return table_name_; }
 

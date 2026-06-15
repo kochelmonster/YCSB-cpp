@@ -1,3 +1,4 @@
+
 //
 //  core_workload.cc
 //  YCSB-cpp
@@ -18,9 +19,12 @@
 #include "utils/sha256.h"
 
 #include <algorithm>
+#include <fstream>
 #include <random>
 #include <string>
 #include <unordered_set>
+
+#include "core/dataset.h"
 
 using ycsbc::CoreWorkload;
 using std::string;
@@ -411,57 +415,108 @@ DB::Status CoreWorkload::TransactionInsert(DB &db) {
   return s;
 }
 
-void CoreWorkload::PrepareOps(int n, bool is_loading, std::vector<WorkItem> &out) {
-  out.reserve(n);
-  if (is_loading) {
-    for (int i = 0; i < n; ++i) {
-      WorkItem item;
+
+void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading) {
+  struct WorkItemLocal {
+    WorkItem::OpType type;
+    std::string key;
+    Fields values;
+    int scan_len{0};
+  };
+
+  for (int i = 0; i < n; ++i) {
+    WorkItemLocal item;
+    if (is_loading) {
       item.type = WorkItem::OpType::INSERT;
       item.key = BuildKeyName(insert_key_sequence_->Next());
       BuildValues(item.values);
-      out.push_back(std::move(item));
+    } else {
+      switch (op_chooser_.Next()) {
+        case READ:
+          item.type = WorkItem::OpType::READ;
+          item.key = BuildKeyName(NextTransactionKeyNum());
+          break;
+        case UPDATE:
+          item.type = WorkItem::OpType::UPDATE;
+          item.key = BuildKeyName(NextTransactionKeyNum());
+          if (write_all_fields_) BuildValues(item.values);
+          else BuildSingleValue(item.values);
+          break;
+        case INSERT: {
+          item.type = WorkItem::OpType::INSERT;
+          uint64_t key_num = transaction_insert_key_sequence_->Next();
+          item.key = BuildKeyName(key_num);
+          BuildValues(item.values);
+          transaction_insert_key_sequence_->Acknowledge(key_num);
+          break;
+        }
+        case SCAN:
+          item.type = WorkItem::OpType::SCAN;
+          item.key = BuildKeyName(NextTransactionKeyNum());
+          item.scan_len = scan_len_chooser_->Next();
+          break;
+        case READMODIFYWRITE:
+          item.type = WorkItem::OpType::READMODIFYWRITE;
+          item.key = BuildKeyName(NextTransactionKeyNum());
+          if (write_all_fields_) BuildValues(item.values);
+          else BuildSingleValue(item.values);
+          break;
+        default:
+          throw utils::Exception("Operation request is not recognized!");
+      }
     }
-    return;
-  }
 
-  for (int i = 0; i < n; ++i) {
-    WorkItem item;
-    switch (op_chooser_.Next()) {
-      case READ:
-        item.type = WorkItem::OpType::READ;
-        item.key = BuildKeyName(NextTransactionKeyNum());
-        break;
-      case UPDATE:
-        item.type = WorkItem::OpType::UPDATE;
-        item.key = BuildKeyName(NextTransactionKeyNum());
-        if (write_all_fields_) BuildValues(item.values);
-        else BuildSingleValue(item.values);
-        break;
-      case INSERT: {
-        item.type = WorkItem::OpType::INSERT;
-        uint64_t key_num = transaction_insert_key_sequence_->Next();
-        item.key = BuildKeyName(key_num);
-        BuildValues(item.values);
-        transaction_insert_key_sequence_->Acknowledge(key_num);
+    uint32_t key_len = item.key.length();
+    uint32_t op_specific_data_len = 0;
+    switch (item.type) {
+      case WorkItem::OpType::INSERT:
+      case WorkItem::OpType::UPDATE: {
+        const std::string& buffer = item.values.buffer();
+        op_specific_data_len += sizeof(uint32_t) + buffer.size();
         break;
       }
-      case SCAN:
-        item.type = WorkItem::OpType::SCAN;
-        item.key = BuildKeyName(NextTransactionKeyNum());
-        item.scan_len = scan_len_chooser_->Next();
+      case WorkItem::OpType::SCAN: {
+        op_specific_data_len += sizeof(uint32_t);
         break;
-      case READMODIFYWRITE:
-        item.type = WorkItem::OpType::READMODIFYWRITE;
-        item.key = BuildKeyName(NextTransactionKeyNum());
-        if (write_all_fields_) BuildValues(item.values);
-        else BuildSingleValue(item.values);
-        break;
+      }
       default:
-        throw utils::Exception("Operation request is not recognized!");
+        break;
     }
-    out.push_back(std::move(item));
+
+    Meta meta;
+    meta.key_offset = ofs.tellp();
+    meta.key_offset += sizeof(char) + sizeof(uint32_t) + sizeof(Meta);
+    meta.op_specific_data_offset = meta.key_offset + sizeof(uint32_t) + key_len;
+    meta.next_record_offset = meta.op_specific_data_offset + op_specific_data_len;
+
+    ofs.put(static_cast<char>(item.type));
+    uint32_t meta_len = sizeof(Meta);
+    ofs.write(reinterpret_cast<const char*>(&meta_len), sizeof(meta_len));
+    ofs.write(reinterpret_cast<const char*>(&meta), sizeof(meta));
+
+    ofs.write(reinterpret_cast<const char*>(&key_len), sizeof(key_len));
+    ofs.write(item.key.data(), key_len);
+
+    switch (item.type) {
+      case WorkItem::OpType::INSERT:
+      case WorkItem::OpType::UPDATE: {
+        const std::string& buffer = item.values.buffer();
+        uint32_t fields_size = buffer.size();
+        ofs.write(reinterpret_cast<const char*>(&fields_size), sizeof(fields_size));
+        ofs.write(buffer.data(), fields_size);
+        break;
+      }
+      case WorkItem::OpType::SCAN: {
+        ofs.write(reinterpret_cast<const char*>(&item.scan_len), sizeof(item.scan_len));
+        break;
+      }
+      default:
+        break;
+    }
   }
 }
+
+
 
 DB::Status CoreWorkload::TransactionMultiKeyAcid(DB &db) {
   uint64_t first_key_num = NextTransactionKeyNum();

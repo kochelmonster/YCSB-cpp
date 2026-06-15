@@ -26,17 +26,17 @@ class SqliteDB : public DB {
 
   void Cleanup();
 
-  Status Read(const std::string &table, const std::string &key,
-              const std::unordered_set<std::string> *fields, Fields &result);
+  Status Read(const std::string &table, Slice key,
+              const std::unordered_set<std::string> *fields, Fields &result) override;
 
-  Status Scan(const std::string &table, const std::string &key, int len,
-              const std::unordered_set<std::string> *fields, std::vector<Fields> &result);
+  Status Scan(const std::string &table, Slice key, int len,
+              const std::unordered_set<std::string> *fields, std::vector<Fields> &result) override;
 
-  Status Update(const std::string &table, const std::string &key, Fields &values);
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values) override;
 
-  Status Insert(const std::string &table, const std::string &key, Fields &values);
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values) override;
 
-  Status Delete(const std::string &table, const std::string &key);
+  Status Delete(const std::string &table, Slice key) override;
 
   Status BeginTransaction() override;
   Status CommitTransaction() override;

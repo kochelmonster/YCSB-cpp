@@ -38,20 +38,20 @@ class LeavesDB : public DB {
 
   void Cleanup();
 
-  Status Read(const std::string& table, const std::string& key,
-              const std::unordered_set<std::string>* fields, Fields& result);
+  Status Read(const std::string& table, Slice key,
+              const std::unordered_set<std::string>* fields, Fields& result) override;
 
-  Status Scan(const std::string& table, const std::string& key, int len,
+  Status Scan(const std::string& table, Slice key, int len,
               const std::unordered_set<std::string>* fields,
-              std::vector<Fields>& result);
+              std::vector<Fields>& result) override;
 
-  Status Update(const std::string& table, const std::string& key,
-                Fields& values);
+  Status Update(const std::string& table, Slice key,
+                const ReadonlyFields& values) override;
 
-  Status Insert(const std::string& table, const std::string& key,
-                Fields& values);
+  Status Insert(const std::string& table, Slice key,
+                const ReadonlyFields& values) override;
 
-  Status Delete(const std::string& table, const std::string& key);
+  Status Delete(const std::string& table, Slice key) override;
 
   Status BeginTransaction();
   Status CommitTransaction();
@@ -94,7 +94,7 @@ class LeavesDB : public DB {
   // Encode a YCSB key ("user" + decimal) into a leaves Slice.
   // Binary mode: strip "user" prefix, parse uint64, store as 8-byte big-endian.
   // ASCII mode:  use the raw string as-is.
-  leaves::Slice EncodeKey(const std::string& key) {
+  leaves::Slice EncodeKey(Slice key) {
     if (!binary_key_) {
       return leaves::Slice(key.data(), key.size());
     }

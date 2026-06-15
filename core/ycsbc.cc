@@ -26,6 +26,7 @@
 #include "utils/rate_limit.h"
 #include "utils/timer.h"
 #include "utils/utils.h"
+#include "core/dataset.h"
 
 void UsageMessage(const char *command);
 bool StrStartWith(const char *str, const char *pre);
@@ -156,9 +157,15 @@ int main(const int argc, const char *argv[]) {
 
     // Pre-generate all keys and values outside the timed window so the measurement
     // reflects DB cost, not YCSB framework cost (BuildKeyName, BuildValues, RNG, ...).
-    std::vector<std::vector<ycsbc::CoreWorkload::WorkItem>> load_pregen(num_threads);
+    std::vector<std::unique_ptr<ycsbc::Dataset>> load_datasets;
+    const bool force_generate = ycsbc::utils::StrToBool(props.GetProperty("force_generate", "false"));
     for (int i = 0; i < num_threads; ++i) {
-      wl.PrepareOps(load_thread_ops[i], true, load_pregen[i]);
+      load_datasets.emplace_back(new ycsbc::Dataset(props, wl, i, true));
+      struct stat buffer;
+      if (stat(load_datasets.back()->GetFullPath().c_str(), &buffer) != 0 || force_generate) {
+        load_datasets.back()->Generate(load_thread_ops[i]);
+      }
+      load_datasets.back()->Open();
     }
 
     // Init all DB instances before starting the timer so open/mmap is excluded.
@@ -175,12 +182,12 @@ int main(const int argc, const char *argv[]) {
       status_future = std::async(std::launch::async, StatusThread,
                                  measurements, &latch, status_interval);
     }
-    std::vector<std::future<int>> client_threads;
-    for (int i = 0; i < num_threads; ++i) {
-      client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                                             load_thread_ops[i], false, false, &latch,
-                                             nullptr, &load_pregen[i]));
-    }
+     std::vector<std::future<int>> client_threads;
+     for (int i = 0; i < num_threads; ++i) {
+       client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
+                                              load_thread_ops[i], true, false, &latch,
+                                              nullptr, load_datasets[i].get()));
+     }
     assert((int)client_threads.size() == num_threads);
 
     int sum = 0;
@@ -233,9 +240,15 @@ int main(const int argc, const char *argv[]) {
 
     // Pre-generate all keys and values outside the timed window so the measurement
     // reflects DB cost, not YCSB framework cost.
-    std::vector<std::vector<ycsbc::CoreWorkload::WorkItem>> txn_pregen(num_threads);
+    std::vector<std::unique_ptr<ycsbc::Dataset>> txn_datasets;
+    const bool force_generate = ycsbc::utils::StrToBool(props.GetProperty("force_generate", "false"));
     for (int i = 0; i < num_threads; ++i) {
-      wl.PrepareOps(txn_thread_ops[i], false, txn_pregen[i]);
+      txn_datasets.emplace_back(new ycsbc::Dataset(props, wl, i, false));
+      struct stat buffer;
+      if (stat(txn_datasets.back()->GetFullPath().c_str(), &buffer) != 0 || force_generate) {
+        txn_datasets.back()->Generate(txn_thread_ops[i]);
+      }
+      txn_datasets.back()->Open();
     }
 
     // Init for run-only case (no load phase ran; DB not yet opened).
@@ -257,16 +270,16 @@ int main(const int argc, const char *argv[]) {
     std::vector<std::future<int>> client_threads;
     std::vector<ycsbc::utils::RateLimiter *> rate_limiters;
     for (int i = 0; i < num_threads; ++i) {
-      ycsbc::utils::RateLimiter *rlim = nullptr;
-      if (ops_limit > 0 || rate_file != "") {
-        int64_t per_thread_ops = ops_limit / num_threads;
-        rlim = new ycsbc::utils::RateLimiter(per_thread_ops, per_thread_ops);
-      }
-      rate_limiters.push_back(rlim);
-      client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                                             txn_thread_ops[i], false, false, &latch,
-                                             rlim, &txn_pregen[i]));
-    }
+       ycsbc::utils::RateLimiter *rlim = nullptr;
+       if (ops_limit > 0 || rate_file != "") {
+         int64_t per_thread_ops = ops_limit / num_threads;
+         rlim = new ycsbc::utils::RateLimiter(per_thread_ops, per_thread_ops);
+       }
+       rate_limiters.push_back(rlim);
+       client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
+                                              txn_thread_ops[i], false, true, &latch,
+                                              rlim, txn_datasets[i].get()));
+     }
 
     std::future<void> rlim_future;
     if (rate_file != "") {

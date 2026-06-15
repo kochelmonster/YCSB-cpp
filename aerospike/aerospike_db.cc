@@ -122,7 +122,7 @@ void AerospikeDB::WaitForAsyncOps() {
   cv_.wait(lock, [this] { return pending_ops_.load() == 0; });
 }
 
-void AerospikeDB::SetRecord(as_record *rec, Fields &values) {
+void AerospikeDB::SetRecord(as_record *rec, const ReadonlyFields &values) {
   for (auto it = values.begin(); it != values.end(); ++it) {
     auto [name, value] = *it;
     // Convert Slice to string
@@ -209,9 +209,9 @@ void AerospikeDB::ReadCallback(as_error* err, as_record* record, void* udata, as
   ctx->db->cv_.notify_one();
 }
 
-DB::Status AerospikeDB::Read(const std::string &table, const std::string &key,
-                             const std::unordered_set<std::string> *fields,
-                             Fields &result) {
+DB::Status AerospikeDB::Read(const std::string &table, Slice key,
+                              const std::unordered_set<std::string> *fields,
+                              Fields &result) {
   if (async_mode_) {
     // Async mode
     while (pending_ops_.load() >= max_concurrent_) {
@@ -221,7 +221,7 @@ DB::Status AerospikeDB::Read(const std::string &table, const std::string &key,
     pending_ops_++;
     
     as_key as_key;
-    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.c_str());
+    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.ToString().c_str());
     
     AsyncReadContext ctx;
     ctx.db = this;
@@ -249,7 +249,7 @@ DB::Status AerospikeDB::Read(const std::string &table, const std::string &key,
   } else {
     // Sync mode
     as_key as_key;
-    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.c_str());
+    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.ToString().c_str());
     
     as_record *rec = nullptr;
     as_error_init(&err_);
@@ -268,13 +268,13 @@ DB::Status AerospikeDB::Read(const std::string &table, const std::string &key,
   }
 }
 
-DB::Status AerospikeDB::Scan(const std::string &table, const std::string &key, int record_count,
-                             const std::unordered_set<std::string> *fields,
-                             std::vector<Fields> &result) {
+DB::Status AerospikeDB::Scan(const std::string &table, Slice key, int record_count,
+                              const std::unordered_set<std::string> *fields,
+                              std::vector<Fields> &result) {
   // Aerospike doesn't support efficient range scans by key
   // We'll implement a simple approach: try to read sequential keys
   for (int i = 0; i < record_count; i++) {
-    std::string scan_key = key + std::to_string(i);
+    std::string scan_key = key.ToString() + std::to_string(i);
     Fields record;
     
     Status s = Read(table, scan_key, fields, record);
@@ -316,8 +316,8 @@ void AerospikeDB::WriteCallback(as_error* err, void* udata, as_event_loop* event
   ctx->db->cv_.notify_one();
 }
 
-DB::Status AerospikeDB::Update(const std::string &table, const std::string &key,
-                               Fields &values) {
+DB::Status AerospikeDB::Update(const std::string &table, Slice key,
+                                const ReadonlyFields &values) {
   if (async_mode_) {
     // Async mode
     while (pending_ops_.load() >= max_concurrent_) {
@@ -327,7 +327,7 @@ DB::Status AerospikeDB::Update(const std::string &table, const std::string &key,
     pending_ops_++;
     
     as_key as_key;
-    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.c_str());
+    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.ToString().c_str());
     
     as_record rec;
     as_record_inita(&rec, values.size());
@@ -359,7 +359,7 @@ DB::Status AerospikeDB::Update(const std::string &table, const std::string &key,
   } else {
     // Sync mode
     as_key as_key;
-    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.c_str());
+    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.ToString().c_str());
     
     as_record rec;
     as_record_inita(&rec, values.size());
@@ -379,12 +379,12 @@ DB::Status AerospikeDB::Update(const std::string &table, const std::string &key,
   }
 }
 
-DB::Status AerospikeDB::Insert(const std::string &table, const std::string &key,
-                               Fields &values) {
+DB::Status AerospikeDB::Insert(const std::string &table, Slice key,
+                                const ReadonlyFields &values) {
   return Update(table, key, values);
 }
 
-DB::Status AerospikeDB::Delete(const std::string &table, const std::string &key) {
+DB::Status AerospikeDB::Delete(const std::string &table, Slice key) {
   if (async_mode_) {
     // Async mode
     while (pending_ops_.load() >= max_concurrent_) {
@@ -394,7 +394,7 @@ DB::Status AerospikeDB::Delete(const std::string &table, const std::string &key)
     pending_ops_++;
     
     as_key as_key;
-    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.c_str());
+    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.ToString().c_str());
     
     AsyncWriteContext ctx;
     ctx.db = this;
@@ -420,7 +420,7 @@ DB::Status AerospikeDB::Delete(const std::string &table, const std::string &key)
   } else {
     // Sync mode
     as_key as_key;
-    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.c_str());
+    as_key_init_str(&as_key, ns_.c_str(), table.c_str(), key.ToString().c_str());
     
     as_error_init(&err_);
     if (aerospike_key_remove(&as_, &err_, &remove_policy_, &as_key) != AEROSPIKE_OK) {

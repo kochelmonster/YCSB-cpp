@@ -26,6 +26,7 @@ BENCHMARK_REPEATS="${BENCHMARK_REPEATS:-1}"
 export YCSB_SEED=12345
 
 DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite" "redis" "badger")
+DATABASES=("leaves")
 if [ -n "${BENCHMARK_DATABASES:-}" ]; then
     read -r -a DATABASES <<< "$BENCHMARK_DATABASES"
 fi
@@ -39,6 +40,10 @@ BASE_WORKLOADS=(
     "workload_kv_range10"
     "workload_kv_range100"
     "workload_kv_rmw"
+)
+
+BASE_WORKLOADS=(
+    "workload_kv_analytics_read"
 )
 
 SCENARIOS=(
@@ -57,6 +62,12 @@ SCENARIOS=(
     "concurrent_write"
     "concurrent_session"
 )
+
+SCENARIOS=(
+    "baseline"
+)
+
+
 
 if [ -n "${BENCHMARK_SCENARIOS:-}" ]; then
     read -r -a SCENARIOS <<< "$BENCHMARK_SCENARIOS"
@@ -398,6 +409,7 @@ run_benchmark() {
     fi
     cmd+=("-s")
 
+    echo "Command: ${cmd[*]}"
     "${cmd[@]}" | tee "$output_file"
     append_db_size "$db" "$output_file"
 
