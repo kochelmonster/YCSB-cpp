@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 #include "core_workload.h"
@@ -13,20 +14,20 @@
 
 namespace ycsbc {
 
-Dataset::Dataset(const utils::Properties &props, CoreWorkload &workload,
+Dataset::Dataset(const utils::Properties& props, CoreWorkload& workload,
                  int thread_id, bool is_loading)
     : props_(props),
       workload_(workload),
       thread_id_(thread_id),
       is_loading_(is_loading),
+      workload_props_hash_(workload.GetPropertiesHash()),
       fd_(-1),
       map_(nullptr),
       size_(0),
       current_(nullptr) {
-  path_ = "../" + props.GetProperty("dataset_path", ".dataset");
+  path_ = props.GetProperty("dataset_path", ".dataset");
   force_generate_ =
       utils::StrToBool(props.GetProperty("force_generate", "false"));
-  GenerateFileName();
 }
 
 Dataset::~Dataset() {
@@ -38,8 +39,8 @@ Dataset::~Dataset() {
   }
 }
 
-void Dataset::Open() {
-  fd_ = open((path_ + "/" + filename_).c_str(), O_RDONLY);
+void Dataset::Open(int op_count) {
+  fd_ = open(GetFullPath(op_count).c_str(), O_RDONLY);
   if (fd_ == -1) {
     throw utils::Exception("Failed to open dataset file");
   }
@@ -54,12 +55,12 @@ void Dataset::Open() {
   if (map_ == MAP_FAILED) {
     throw utils::Exception("Failed to map file to memory");
   }
-  current_ = static_cast<char *>(map_);
+  current_ = static_cast<char*>(map_);
 }
 
 void Dataset::Generate(int op_count) {
   std::filesystem::create_directories(path_);
-  std::ofstream ofs(path_ + "/" + filename_, std::ios::binary);
+  std::ofstream ofs(GetFullPath(op_count), std::ios::binary);
   if (!ofs.is_open()) {
     throw utils::Exception("Failed to open dataset file for writing");
   }
@@ -68,55 +69,61 @@ void Dataset::Generate(int op_count) {
   ofs.close();
 }
 
-std::string Dataset::GetFullPath() const {
-  return path_ + "/" + filename_;
-}
+void Dataset::DEBUG(int op_count) {
+  /* Test the dataset*/
+  Open(op_count);
+  for (int i = 0; i < op_count; ++i) {
+    const auto& item = Next();
+    const auto& values = item.values;
 
-const CoreWorkload::WorkItem &Dataset::Next() {
-  if (current_ >= static_cast<char *>(map_) + size_) {
-    throw utils::Exception("End of dataset");
+    std::string type_str;
+    switch (item.type) {
+      case CoreWorkload::WorkItem::OpType::INSERT:
+        type_str = "INSERT";
+        break;
+      case CoreWorkload::WorkItem::OpType::UPDATE:
+        type_str = "UPDATE";
+        break;
+      case CoreWorkload::WorkItem::OpType::READ:
+        type_str = "READ";
+        break;
+      case CoreWorkload::WorkItem::OpType::SCAN:
+        type_str = "SCAN";
+        break;
+      case CoreWorkload::WorkItem::OpType::READMODIFYWRITE:
+        type_str = "READMODIFYWRITE";
+        break;
+      default:
+        type_str = "UNKNOWN";
+        break;
+    }
+
+    std::cout << "Testitem" << i << ": " << type_str << " " << item.key.ToString() << " with "
+              << values.size() << " fields" << std::endl;
+#if 0
+    ReadonlyFields readonly(values);
+    // check correctnes of the values
+    for (auto current_it = readonly.begin(); current_it != readonly.end();
+         ++current_it) {
+      std::cout << "  field name: " << current_it.name().ToString()
+                << ", value size: " << current_it.value().size() << std::endl;
+    }
+#endif
   }
 
-  current_work_item_.type = static_cast<CoreWorkload::WorkItem::OpType>(*current_);
-  current_++;
-
-  uint32_t meta_len = *reinterpret_cast<uint32_t *>(current_);
-  current_ += sizeof(uint32_t);
-
-  const Meta *meta = reinterpret_cast<const Meta *>(current_);
-  current_ += meta_len;
-
-  const char *key_ptr = reinterpret_cast<const char *>(map_) + meta->key_offset;
-  uint32_t key_len = *reinterpret_cast<const uint32_t *>(key_ptr);
-  key_ptr += sizeof(uint32_t);
-  current_work_item_.key = Slice(key_ptr, key_len);
-
-  const char *op_specific_data_ptr =
-      reinterpret_cast<const char *>(map_) + meta->op_specific_data_offset;
-
-  switch (current_work_item_.type) {
-    case CoreWorkload::WorkItem::OpType::INSERT:
-    case CoreWorkload::WorkItem::OpType::UPDATE: {
-      uint32_t fields_size = *reinterpret_cast<const uint32_t *>(op_specific_data_ptr);
-      current_work_item_.values = ReadonlyFields(op_specific_data_ptr, fields_size);
-      break;
-    }
-    case CoreWorkload::WorkItem::OpType::SCAN: {
-      current_work_item_.scan_len = *reinterpret_cast<const uint32_t *>(op_specific_data_ptr);
-      break;
-    }
-    default:
-      break;
+  if (map_) {
+    munmap(map_, size_);
+    map_ = nullptr;
   }
-
-  current_ = reinterpret_cast<char *>(map_) + meta->next_record_offset;
-
-  return current_work_item_;
+  if (fd_ != -1) {
+    close(fd_);
+    fd_ = -1;
+  }
 }
 
-void Dataset::GenerateFileName() {
+std::string Dataset::GetFullPath(int op_count) const {
   std::stringstream ss;
-  ss << props_.GetProperty("workload", "workloada") << "-";
+  ss << workload_props_hash_ << "-";
   if (is_loading_) {
     ss << "load-";
   } else {
@@ -124,10 +131,56 @@ void Dataset::GenerateFileName() {
   }
   ss << "recordcount" << props_.GetProperty(CoreWorkload::RECORD_COUNT_PROPERTY)
      << "-";
-  ss << "operationcount"
-     << props_.GetProperty(CoreWorkload::OPERATION_COUNT_PROPERTY) << "-";
+  ss << "operationcount" << op_count << "-";
   ss << "thread" << thread_id_;
-  filename_ = ss.str() + ".dat";
+  return path_ + "/" + ss.str() + ".dat";
+}
+
+const CoreWorkload::WorkItem& Dataset::Next() {
+  if (current_ >= static_cast<char*>(map_) + size_) {
+    throw utils::Exception("End of dataset");
+  }
+
+  current_work_item_.type =
+      static_cast<CoreWorkload::WorkItem::OpType>(*current_);
+  current_++;
+
+  uint32_t meta_len = *reinterpret_cast<uint32_t*>(current_);
+  current_ += sizeof(uint32_t);
+
+  const Meta* meta = reinterpret_cast<const Meta*>(current_);
+  current_ += meta_len;
+
+  const char* key_ptr = reinterpret_cast<const char*>(map_) + meta->key_offset;
+  uint32_t key_len = *reinterpret_cast<const uint32_t*>(key_ptr);
+  key_ptr += sizeof(uint32_t);
+  current_work_item_.key = Slice(key_ptr, key_len);
+
+  const char* op_specific_data_ptr =
+      reinterpret_cast<const char*>(map_) + meta->op_specific_data_offset;
+
+  switch (current_work_item_.type) {
+    case CoreWorkload::WorkItem::OpType::INSERT:
+    case CoreWorkload::WorkItem::OpType::UPDATE: {
+      uint32_t fields_size =
+          *reinterpret_cast<const uint32_t*>(op_specific_data_ptr);
+      current_work_item_.values =
+          ReadonlyFields(op_specific_data_ptr + sizeof(uint32_t), fields_size);
+      break;
+    }
+    case CoreWorkload::WorkItem::OpType::SCAN: {
+      current_work_item_.scan_len =
+          *reinterpret_cast<const uint32_t*>(op_specific_data_ptr);
+      break;
+    }
+    default:
+      current_work_item_.values = ReadonlyFields();
+      break;
+  }
+
+  current_ = reinterpret_cast<char*>(map_) + meta->next_record_offset;
+
+  return current_work_item_;
 }
 
 }  // namespace ycsbc

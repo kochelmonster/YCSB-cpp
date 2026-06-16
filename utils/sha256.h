@@ -59,5 +59,6 @@ protected:
 };
 
 std::string sha256(std::string input);
+void sha256bin(const char* input, std::string& output);
 
 #endif /* !SHA256_H */

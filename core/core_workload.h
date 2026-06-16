@@ -201,7 +201,6 @@ class CoreWorkload {
   };
 
   void PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading);
-  void PrepareOps(Dataset &dataset, bool is_loading);
 
   const std::string &table_name() const { return table_name_; }
 
@@ -225,8 +224,11 @@ class CoreWorkload {
     delete transaction_insert_key_sequence_;
   }
 
+  const std::string &GetPropertiesHash() const { return properties_hash_; }
+
  protected:
   static Generator<uint64_t> *GetFieldLenGenerator(const utils::Properties &p);
+  std::string GetPropertiesHash(const utils::Properties &p);
   std::string BuildKeyName(uint64_t key_num);
   void BuildValues(Fields &values);
   void BuildSingleValue(Fields &update);
@@ -258,6 +260,7 @@ class CoreWorkload {
   size_t record_count_;
   int zero_padding_;
   bool explicit_transaction_mode_;
+  std::string properties_hash_;
   
   // Pre-built field names to avoid string construction in hot path
   std::vector<std::string> field_names_;

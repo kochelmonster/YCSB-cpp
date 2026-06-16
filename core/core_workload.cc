@@ -222,6 +222,27 @@ void CoreWorkload::Init(const utils::Properties &p) {
   } else {
     throw utils::Exception("Distribution not allowed for scan length: " + scan_len_dist);
   }
+  properties_hash_ = GetPropertiesHash(p);
+}
+
+std::string CoreWorkload::GetPropertiesHash(const utils::Properties &p) {
+  std::string str_to_hash;
+  str_to_hash += p.GetProperty(READ_PROPORTION_PROPERTY, READ_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(UPDATE_PROPORTION_PROPERTY, UPDATE_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(INSERT_PROPORTION_PROPERTY, INSERT_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(SCAN_PROPORTION_PROPERTY, SCAN_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(READMODIFYWRITE_PROPORTION_PROPERTY, READMODIFYWRITE_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(REQUEST_DISTRIBUTION_PROPERTY, REQUEST_DISTRIBUTION_DEFAULT);
+  str_to_hash += p.GetProperty(MIN_SCAN_LENGTH_PROPERTY, MIN_SCAN_LENGTH_DEFAULT);
+  str_to_hash += p.GetProperty(MAX_SCAN_LENGTH_PROPERTY, MAX_SCAN_LENGTH_DEFAULT);
+  str_to_hash += p.GetProperty(SCAN_LENGTH_DISTRIBUTION_PROPERTY, SCAN_LENGTH_DISTRIBUTION_DEFAULT);
+  str_to_hash += p.GetProperty(INSERT_ORDER_PROPERTY, INSERT_ORDER_DEFAULT);
+  str_to_hash += p.GetProperty(HASH_ALGO_PROPERTY, HASH_ALGO_DEFAULT);
+
+  if (p.ContainsKey(ZIPFIAN_CONST_PROPERTY)) {
+    str_to_hash += p.GetProperty(ZIPFIAN_CONST_PROPERTY);
+  }
+  return sha256(str_to_hash);
 }
 
 ycsbc::Generator<uint64_t> *CoreWorkload::GetFieldLenGenerator(
@@ -245,7 +266,7 @@ std::string CoreWorkload::BuildKeyName(uint64_t key_num) {
     if (hash_algo_ == "sha256") {
       char num_buf[32];
       snprintf(num_buf, sizeof(num_buf), "%lu", key_num);
-      tl_key_buffer = sha256(std::string(num_buf));
+      sha256bin(num_buf, tl_key_buffer);
       return tl_key_buffer;
     } else { // fnv
       key_num = utils::Hash(key_num);
@@ -415,7 +436,6 @@ DB::Status CoreWorkload::TransactionInsert(DB &db) {
   return s;
 }
 
-
 void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading) {
   struct WorkItemLocal {
     WorkItem::OpType type;
@@ -424,8 +444,8 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
     int scan_len{0};
   };
 
+  WorkItemLocal item;
   for (int i = 0; i < n; ++i) {
-    WorkItemLocal item;
     if (is_loading) {
       item.type = WorkItem::OpType::INSERT;
       item.key = BuildKeyName(insert_key_sequence_->Next());
@@ -435,6 +455,7 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
         case READ:
           item.type = WorkItem::OpType::READ;
           item.key = BuildKeyName(NextTransactionKeyNum());
+          item.values.clear();
           break;
         case UPDATE:
           item.type = WorkItem::OpType::UPDATE;
@@ -454,6 +475,7 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
           item.type = WorkItem::OpType::SCAN;
           item.key = BuildKeyName(NextTransactionKeyNum());
           item.scan_len = scan_len_chooser_->Next();
+          item.values.clear();
           break;
         case READMODIFYWRITE:
           item.type = WorkItem::OpType::READMODIFYWRITE;
@@ -515,8 +537,6 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
     }
   }
 }
-
-
 
 DB::Status CoreWorkload::TransactionMultiKeyAcid(DB &db) {
   uint64_t first_key_num = NextTransactionKeyNum();

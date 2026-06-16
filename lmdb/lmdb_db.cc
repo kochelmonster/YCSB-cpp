@@ -13,58 +13,60 @@
 #define mkdir(x, y) _mkdir(x)
 #endif
 
-#include "lmdb_db.h"
+#include <lmdb.h>
+
 #include "core/core_workload.h"
 #include "core/db_factory.h"
+#include "lmdb_db.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
 
-#include <lmdb.h>
-
 namespace {
-  const std::string PROP_DBPATH = "lmdb.dbpath";
-  const std::string PROP_DBPATH_DEFAULT = "";
+const std::string PROP_DBPATH = "lmdb.dbpath";
+const std::string PROP_DBPATH_DEFAULT = "";
 
-  const std::string PROP_MAPSIZE = "lmdb.mapsize";
-  const std::string PROP_MAPSIZE_DEFAULT = "-1";
+const std::string PROP_MAPSIZE = "lmdb.mapsize";
+const std::string PROP_MAPSIZE_DEFAULT = "-1";
 
-  const std::string PROP_NOSYNC = "lmdb.nosync";
-  const std::string PROP_NOSYNC_DEFAULT = "false";
+const std::string PROP_NOSYNC = "lmdb.nosync";
+const std::string PROP_NOSYNC_DEFAULT = "false";
 
-  const std::string PROP_NOMETASYNC = "lmdb.nometasync";
-  const std::string PROP_NOMETASYNC_DEFAULT = "false";
+const std::string PROP_NOMETASYNC = "lmdb.nometasync";
+const std::string PROP_NOMETASYNC_DEFAULT = "false";
 
-  const std::string PROP_NORDAHEAD = "lmdb.noreadahead";
-  const std::string PROP_NORDAHEAD_DEFAULT = "false";
+const std::string PROP_NORDAHEAD = "lmdb.noreadahead";
+const std::string PROP_NORDAHEAD_DEFAULT = "false";
 
-  const std::string PROP_WRITEMAP = "lmdb.writemap";
-  const std::string PROP_WRITEMAP_DEFAULT = "false";
+const std::string PROP_WRITEMAP = "lmdb.writemap";
+const std::string PROP_WRITEMAP_DEFAULT = "false";
 
-  const std::string PROP_MAPASYNC = "lmdb.mapasync";
-  const std::string PROP_MAPASYNC_DEFAULT = "false";
+const std::string PROP_MAPASYNC = "lmdb.mapasync";
+const std::string PROP_MAPASYNC_DEFAULT = "false";
 
-  const std::string PROP_BINARY_KEY = "lmdb.binary_key";
-  const std::string PROP_BINARY_KEY_DEFAULT = "false";
+const std::string PROP_BINARY_KEY = "lmdb.binary_key";
+const std::string PROP_BINARY_KEY_DEFAULT = "false";
 
-  const std::string PROP_BATCH_SIZE = "lmdb.batch_size";
-  const std::string PROP_BATCH_SIZE_DEFAULT = "1";
-} // anonymous
+const std::string PROP_BATCH_SIZE = "lmdb.batch_size";
+const std::string PROP_BATCH_SIZE_DEFAULT = "1";
+}  // namespace
 
 namespace ycsbc {
 
 size_t LmdbDB::field_count_;
 std::string LmdbDB::field_prefix_;
 
-MDB_env *LmdbDB::env_;
+MDB_env* LmdbDB::env_;
 MDB_dbi LmdbDB::dbi_;
 int LmdbDB::ref_cnt_ = 0;
 std::mutex LmdbDB::mutex_;
 
 void LmdbDB::Init() {
-  const utils::Properties &props = *props_;
+  const utils::Properties& props = *props_;
 
-  binary_key_ = props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
-  batch_size_ = std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
+  binary_key_ =
+      props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
+  batch_size_ =
+      std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
   if (batch_size_ < 1) batch_size_ = 1;
   pending_ = 0;
   write_txn_ = nullptr;
@@ -75,8 +77,8 @@ void LmdbDB::Init() {
     return;
   }
 
-  field_count_ = std::stoi(props.GetProperty(CoreWorkload::FIELD_COUNT_PROPERTY,
-                                            CoreWorkload::FIELD_COUNT_DEFAULT));
+  field_count_ = std::stoi(props.GetProperty(
+      CoreWorkload::FIELD_COUNT_PROPERTY, CoreWorkload::FIELD_COUNT_DEFAULT));
   field_prefix_ = props.GetProperty(CoreWorkload::FIELD_NAME_PREFIX,
                                     CoreWorkload::FIELD_NAME_PREFIX_DEFAULT);
 
@@ -98,17 +100,21 @@ void LmdbDB::Init() {
     env_opt |= MDB_MAPASYNC;
   }
   ret = mdb_env_create(&env_);
-  if  (ret) {
-    throw utils::Exception(std::string("Init mdb_env_create: ") + mdb_strerror(ret));
+  if (ret) {
+    throw utils::Exception(std::string("Init mdb_env_create: ") +
+                           mdb_strerror(ret));
   }
-  size_t map_size = std::stoul(props.GetProperty(PROP_MAPSIZE, PROP_MAPSIZE_DEFAULT));
+  size_t map_size =
+      std::stoul(props.GetProperty(PROP_MAPSIZE, PROP_MAPSIZE_DEFAULT));
   if (map_size >= 0) {
     ret = mdb_env_set_mapsize(env_, map_size);
     if (ret) {
-      throw utils::Exception(std::string("Init mdb_env_set_mapsize: ") + mdb_strerror(ret));
+      throw utils::Exception(std::string("Init mdb_env_set_mapsize: ") +
+                             mdb_strerror(ret));
     }
   }
-  const std::string &db_path = props.GetProperty(PROP_DBPATH, PROP_DBPATH_DEFAULT);
+  const std::string& db_path =
+      props.GetProperty(PROP_DBPATH, PROP_DBPATH_DEFAULT);
   if (db_path == "") {
     throw utils::Exception("LMDB db path is missing");
   }
@@ -118,13 +124,15 @@ void LmdbDB::Init() {
   }
   ret = mdb_env_open(env_, db_path.c_str(), env_opt, 0664);
   if (ret) {
-    throw utils::Exception(std::string("Init mdb_env_open: ") + mdb_strerror(ret));
+    throw utils::Exception(std::string("Init mdb_env_open: ") +
+                           mdb_strerror(ret));
   }
 
-  MDB_txn *txn;
+  MDB_txn* txn;
   ret = mdb_txn_begin(env_, nullptr, 0, &txn);
   if (ret) {
-    throw utils::Exception(std::string("Init mdb_txn_begin: ") + mdb_strerror(ret));
+    throw utils::Exception(std::string("Init mdb_txn_begin: ") +
+                           mdb_strerror(ret));
   }
   ret = mdb_open(txn, nullptr, 0, &dbi_);
   if (ret) {
@@ -132,7 +140,8 @@ void LmdbDB::Init() {
   }
   ret = mdb_txn_commit(txn);
   if (ret) {
-    throw utils::Exception(std::string("Init mdb_txn_commit: ") + mdb_strerror(ret));
+    throw utils::Exception(std::string("Init mdb_txn_commit: ") +
+                           mdb_strerror(ret));
   }
 }
 
@@ -151,7 +160,9 @@ DB::Status LmdbDB::BeginTransaction() {
   FlushBatch();
   if (!write_txn_) {
     int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
-    if (ret) throw utils::Exception(std::string("BeginTransaction mdb_txn_begin: ") + mdb_strerror(ret));
+    if (ret)
+      throw utils::Exception(std::string("BeginTransaction mdb_txn_begin: ") +
+                             mdb_strerror(ret));
   }
   pending_ = 0;
   txn_active_ = true;
@@ -164,7 +175,9 @@ DB::Status LmdbDB::CommitTransaction() {
   int ret = mdb_txn_commit(write_txn_);
   write_txn_ = nullptr;
   pending_ = 0;
-  if (ret) throw utils::Exception(std::string("CommitTransaction mdb_txn_commit: ") + mdb_strerror(ret));
+  if (ret)
+    throw utils::Exception(std::string("CommitTransaction mdb_txn_commit: ") +
+                           mdb_strerror(ret));
   return kOK;
 }
 
@@ -177,8 +190,9 @@ DB::Status LmdbDB::RollbackTransaction() {
   return kOK;
 }
 
-DB::Status LmdbDB::Read(const std::string &table, Slice key, const std::unordered_set<std::string> *fields,
-                          Fields &result) {
+DB::Status LmdbDB::Read(const std::string& table, Slice key,
+                        const std::unordered_set<std::string>* fields,
+                        Fields& result) {
   DB::Status s = kOK;
   MDB_val key_slice = EncodeKey(key.ToString());
   MDB_val val_slice;
@@ -187,23 +201,27 @@ DB::Status LmdbDB::Read(const std::string &table, Slice key, const std::unordere
   if (txn_active_) {
     ret = mdb_get(write_txn_, dbi_, &key_slice, &val_slice);
     if (ret == MDB_NOTFOUND) return kNotFound;
-    if (ret) throw utils::Exception(std::string("Read mdb_get: ") + mdb_strerror(ret));
+    if (ret)
+      throw utils::Exception(std::string("Read mdb_get: ") + mdb_strerror(ret));
     if (fields != nullptr) {
-      ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+      ReadonlyFields readonly(static_cast<char*>(val_slice.mv_data),
+                              val_slice.mv_size);
       readonly.filter(result, *fields);
     } else {
-      ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+      ReadonlyFields readonly(static_cast<char*>(val_slice.mv_data),
+                              val_slice.mv_size);
       result = readonly;
     }
     return kOK;
   }
 
   FlushBatch();
-  MDB_txn *txn;
+  MDB_txn* txn;
   // Use MDB_RDONLY | MDB_NOTLS for fast lock-free reads
   ret = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
   if (ret) {
-    throw utils::Exception(std::string("Read mdb_txn_begin: ") + mdb_strerror(ret));
+    throw utils::Exception(std::string("Read mdb_txn_begin: ") +
+                           mdb_strerror(ret));
   }
   ret = mdb_get(txn, dbi_, &key_slice, &val_slice);
   if (ret == MDB_NOTFOUND) {
@@ -215,10 +233,12 @@ DB::Status LmdbDB::Read(const std::string &table, Slice key, const std::unordere
     throw utils::Exception(std::string("Read mdb_get: ") + mdb_strerror(ret));
   }
   if (fields != nullptr) {
-    ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+    ReadonlyFields readonly(static_cast<char*>(val_slice.mv_data),
+                            val_slice.mv_size);
     readonly.filter(result, *fields);
   } else {
-    ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+    ReadonlyFields readonly(static_cast<char*>(val_slice.mv_data),
+                            val_slice.mv_size);
     result = readonly;
   }
   // Abort instead of commit for read-only transactions (faster)
@@ -226,40 +246,45 @@ DB::Status LmdbDB::Read(const std::string &table, Slice key, const std::unordere
   return s;
 }
 
-DB::Status LmdbDB::Scan(const std::string &table, Slice key, int len,
-                          const std::unordered_set<std::string> *fields,
-                          std::vector<Fields> &result) {
+DB::Status LmdbDB::Scan(const std::string& table, Slice key, int len,
+                        const std::unordered_set<std::string>* fields,
+                        std::vector<Fields>& result) {
   DB::Status s = kOK;
   FlushBatch();
-  MDB_txn *txn;
-  MDB_cursor *cursor;
+  MDB_txn* txn;
+  MDB_cursor* cursor;
   MDB_val key_slice = EncodeKey(key.ToString());
   MDB_val val_slice;
 
   int ret;
   ret = mdb_txn_begin(env_, nullptr, 0, &txn);
   if (ret) {
-    throw utils::Exception(std::string("Scan mdb_txn_begin: ") + mdb_strerror(ret));
+    throw utils::Exception(std::string("Scan mdb_txn_begin: ") +
+                           mdb_strerror(ret));
   }
   ret = mdb_cursor_open(txn, dbi_, &cursor);
   if (ret) {
-    throw utils::Exception(std::string("Scan mdb_cursor_open: ") + mdb_strerror(ret));
+    throw utils::Exception(std::string("Scan mdb_cursor_open: ") +
+                           mdb_strerror(ret));
   }
   ret = mdb_cursor_get(cursor, &key_slice, &val_slice, MDB_SET);
   if (ret == MDB_NOTFOUND) {
     s = kNotFound;
     goto cleanup;
   } else if (ret) {
-    throw utils::Exception(std::string("Scan mdb_cursor_get: ") + mdb_strerror(ret));
+    throw utils::Exception(std::string("Scan mdb_cursor_get: ") +
+                           mdb_strerror(ret));
   }
   for (int i = 0; !ret && i < len; i++) {
     result.emplace_back();
-    Fields &values = result.back();
+    Fields& values = result.back();
     if (fields != nullptr) {
-      ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+      ReadonlyFields readonly(static_cast<char*>(val_slice.mv_data),
+                              val_slice.mv_size);
       readonly.filter(values, *fields);
     } else {
-      ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
+      ReadonlyFields readonly(static_cast<char*>(val_slice.mv_data),
+                              val_slice.mv_size);
       values = readonly;
     }
     ret = mdb_cursor_get(cursor, &key_slice, &val_slice, MDB_NEXT);
@@ -270,28 +295,31 @@ cleanup:
   return s;
 }
 
-DB::Status LmdbDB::Update(const std::string &table, Slice key, const ReadonlyFields &values) {
+DB::Status LmdbDB::Update(const std::string& table, Slice key,
+                          const ReadonlyFields& values) {
   FlushBatch();
   MDB_val key_slice = EncodeKey(key.ToString());
   MDB_val val_slice;
 
   if (!write_txn_) {
     int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
-    if (ret) throw utils::Exception(std::string("Update mdb_txn_begin: ") + mdb_strerror(ret));
+    if (ret)
+      throw utils::Exception(std::string("Update mdb_txn_begin: ") +
+                             mdb_strerror(ret));
   }
   int ret = mdb_get(write_txn_, dbi_, &key_slice, &val_slice);
   if (ret) {
     throw utils::Exception(std::string("Update mdb_get: ") + mdb_strerror(ret));
   }
-  Fields current_values;
-  ReadonlyFields readonly(static_cast<char *>(val_slice.mv_data), val_slice.mv_size);
-  current_values = readonly;
-  
-  Fields new_values;
-  new_values = const_cast<ReadonlyFields&>(values);
-  Slice updated_data = current_values.update(new_values);
 
-  val_slice.mv_data = const_cast<char *>(updated_data.data());
+  ReadonlyFields readonly(static_cast<char*>(val_slice.mv_data),
+                          val_slice.mv_size);
+  current_values_ = readonly;
+
+  ReadonlyFields& new_values = const_cast<ReadonlyFields&>(values);
+  Slice updated_data = current_values_.update(new_values);
+
+  val_slice.mv_data = const_cast<char*>(updated_data.data());
   val_slice.mv_size = updated_data.size();
   ret = mdb_put(write_txn_, dbi_, &key_slice, &val_slice, 0);
   if (ret) {
@@ -301,42 +329,45 @@ DB::Status LmdbDB::Update(const std::string &table, Slice key, const ReadonlyFie
   return kOK;
 }
 
-DB::Status LmdbDB::Insert(const std::string &table, Slice key, const ReadonlyFields &values) {
+DB::Status LmdbDB::Insert(const std::string& table, Slice key,
+                          const ReadonlyFields& values) {
   MDB_val key_slice = EncodeKey(key.ToString());
-  Fields new_values;
-  new_values = const_cast<ReadonlyFields&>(values);
-  const std::string &data = new_values.buffer();
+  auto data = values.data();
   MDB_val val_slice;
-  val_slice.mv_data = static_cast<void *>(const_cast<char *>(data.data()));
+  val_slice.mv_data = static_cast<void*>(const_cast<char*>(data.data()));
   val_slice.mv_size = data.size();
 
   if (!write_txn_) {
     int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
-    if (ret) throw utils::Exception(std::string("Insert mdb_txn_begin: ") + mdb_strerror(ret));
+    if (ret)
+      throw utils::Exception(std::string("Insert mdb_txn_begin: ") +
+                             mdb_strerror(ret));
   }
   int ret = mdb_put(write_txn_, dbi_, &key_slice, &val_slice, 0);
-  if (ret) throw utils::Exception(std::string("Insert mdb_put: ") + mdb_strerror(ret));
+  if (ret)
+    throw utils::Exception(std::string("Insert mdb_put: ") + mdb_strerror(ret));
   CommitMutation();
   return kOK;
 }
 
-DB::Status LmdbDB::Delete(const std::string &table, Slice key) {
+DB::Status LmdbDB::Delete(const std::string& table, Slice key) {
   MDB_val key_slice = EncodeKey(key.ToString());
 
   if (!write_txn_) {
     int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
-    if (ret) throw utils::Exception(std::string("Delete mdb_txn_begin: ") + mdb_strerror(ret));
+    if (ret)
+      throw utils::Exception(std::string("Delete mdb_txn_begin: ") +
+                             mdb_strerror(ret));
   }
   int ret = mdb_del(write_txn_, dbi_, &key_slice, nullptr);
-  if (ret) throw utils::Exception(std::string("Delete mdb_del: ") + mdb_strerror(ret));
+  if (ret)
+    throw utils::Exception(std::string("Delete mdb_del: ") + mdb_strerror(ret));
   CommitMutation();
   return kOK;
 }
 
-DB *NewLmdbDB() {
-  return new LmdbDB;
-}
+DB* NewLmdbDB() { return new LmdbDB; }
 
 const bool registered = DBFactory::RegisterDB("lmdb", NewLmdbDB);
 
-} // ycsbc
+}  // namespace ycsbc

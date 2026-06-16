@@ -46,6 +46,7 @@ class BadgerDB : public DB {
   bool binary_key_;
   bool sync_writes_;
   char key_buf_[8];
+  Fields updated_fields_;
 
   std::string EncodeKey(Slice key) {
     if (!binary_key_) {

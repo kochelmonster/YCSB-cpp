@@ -52,6 +52,7 @@ class LmdbDB : public DB {
   bool binary_key_;
   int batch_size_;
   int pending_;
+  Fields current_values_;
   MDB_txn *write_txn_;
   bool txn_active_;
   char key_buf_[8];

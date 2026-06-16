@@ -425,13 +425,11 @@ DB::Status RocksdbDB::UpdateSingle(const std::string &table, Slice key,
   } else if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
   }
-  Fields updated_fields;
+  
   ReadonlyFields readonly(data.data(), data.size());
-  updated_fields = readonly;
-  for (auto it = values.begin(); it != values.end(); ++it) {
-    updated_fields.add((*it).first.data(), (*it).first.size(), (*it).second.data(), (*it).second.size());
-  }
-  const auto& buffer = updated_fields.buffer();
+  updated_fields_ = readonly;
+  updated_fields_.update(values);
+  const auto& buffer = updated_fields_.buffer();
   write_batch_.Put(encoded, rocksdb::Slice(buffer.data(), buffer.size()));
   CommitMutation();
   return kOK;

@@ -22,6 +22,8 @@ class WTDB : public DB {
 
   void Init();
 
+  // Cleanup the database, closing the session and connection.
+  // This method is idempotent and can be called multiple times.
   void Cleanup();
 
   Status BeginTransaction();
@@ -80,13 +82,13 @@ class WTDB : public DB {
   WT_SESSION *session_{nullptr};
   WT_CURSOR *cursor_{nullptr};
   bool transaction_active_{false};
-
+  Fields current_values_;
   static int ref_cnt_;
   static std::mutex mu_;
 
 };
 
-DB *NewRocksdbDB();
+DB *NewWTDB();
 
 } // namespace ycsbc
 

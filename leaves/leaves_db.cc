@@ -100,9 +100,9 @@ void LeavesDB::Init() {
     try {
       storage_ =
           std::make_shared<leaves::MapStorage>(dbpath_.c_str(), mapsize_);
-      std::cout << "Leaves stroage initialized: " << dbpath_ << std::endl;
+      std::cout << "Leaves storage initialized: " << dbpath_ << std::endl;
     } catch (const std::exception& e) {
-      std::cerr << "Failed to initialize Leaves stroage: " << e.what()
+      std::cerr << "Failed to initialize Leaves storage: " << e.what()
                 << std::endl;
       throw;
     }
@@ -254,8 +254,7 @@ DB::Status LeavesDB::Read(const std::string& /*table*/, Slice key,
   }
 }
 
-DB::Status LeavesDB::Scan(const std::string& /*table*/, Slice key,
-                          int len,
+DB::Status LeavesDB::Scan(const std::string& /*table*/, Slice key, int len,
                           const std::unordered_set<std::string>* fields,
                           std::vector<Fields>& result) {
   try {
@@ -306,8 +305,8 @@ DB::Status LeavesDB::Scan(const std::string& /*table*/, Slice key,
   }
 }
 
-DB::Status LeavesDB::Update(const std::string& /*table*/,
-                            Slice key, const ReadonlyFields& values) {
+DB::Status LeavesDB::Update(const std::string& /*table*/, Slice key,
+                            const ReadonlyFields& values) {
   try {
     EnsureMutationReady();
     leaves::Slice key_slice = EncodeKey(key);
@@ -325,13 +324,11 @@ DB::Status LeavesDB::Update(const std::string& /*table*/,
       if (!confluence_cursor_.is_valid()) {
         return kNotFound;
       }
-      Fields updated_fields;
+
       ReadonlyFields readonly(existing_value.data(), existing_value.size());
-      updated_fields = readonly;
-      for (auto it = values.begin(); it != values.end(); ++it) {
-        updated_fields.add((*it).first.data(), (*it).first.size(), (*it).second.data(), (*it).second.size());
-      }
-      const auto& buffer = updated_fields.buffer();
+      updated_fields_ = readonly;
+      updated_fields_.update(values);
+      const auto& buffer = updated_fields_.buffer();
       leaves::Slice value_slice(buffer.data(), buffer.size());
       confluence_cursor_.value(value_slice);
     } else {
@@ -340,13 +337,10 @@ DB::Status LeavesDB::Update(const std::string& /*table*/,
         return kNotFound;
       }
       leaves::Slice existing_value = cursor_.value();
-      Fields updated_fields;
       ReadonlyFields readonly(existing_value.data(), existing_value.size());
-      updated_fields = readonly;
-      for (auto it = values.begin(); it != values.end(); ++it) {
-        updated_fields.add((*it).first.data(), (*it).first.size(), (*it).second.data(), (*it).second.size());
-      }
-      const auto& buffer = updated_fields.buffer();
+      updated_fields_ = readonly;
+      updated_fields_.update(values);
+      const auto& buffer = updated_fields_.buffer();
       leaves::Slice value_slice(buffer.data(), buffer.size());
       cursor_.value(value_slice);
     }
@@ -359,8 +353,8 @@ DB::Status LeavesDB::Update(const std::string& /*table*/,
   }
 }
 
-DB::Status LeavesDB::Insert(const std::string& /*table*/,
-                            Slice key, const ReadonlyFields& values) {
+DB::Status LeavesDB::Insert(const std::string& /*table*/, Slice key,
+                            const ReadonlyFields& values) {
   try {
     EnsureMutationReady();
     leaves::Slice key_slice = EncodeKey(key);
@@ -386,8 +380,7 @@ DB::Status LeavesDB::Insert(const std::string& /*table*/,
   }
 }
 
-DB::Status LeavesDB::Delete(const std::string& /*table*/,
-                            Slice key) {
+DB::Status LeavesDB::Delete(const std::string& /*table*/, Slice key) {
   try {
     EnsureMutationReady();
     leaves::Slice key_slice = EncodeKey(key);

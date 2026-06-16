@@ -66,6 +66,7 @@ class LeveldbDB : public DB {
     kColumnMajor
   };
   LdbFormat format_;
+  Fields updated_fields_;
 
   void GetOptions(const utils::Properties &props, leveldb::Options *opt);
   std::string BuildCompKey(const std::string &key, const std::string &field_name);

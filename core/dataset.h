@@ -27,21 +27,21 @@ class Dataset {
   Dataset(const utils::Properties &props, CoreWorkload &workload, int thread_id, bool is_loading);
   ~Dataset();
 
-  void Open();
+  void Open(int op_count);
   void Generate(int op_count);
-  std::string GetFullPath() const;
+  std::string GetFullPath(int op_count) const;
+  void DEBUG(int op_count);
 
   const CoreWorkload::WorkItem &Next();
 
  private:
-  void GenerateFileName();
 
   const utils::Properties &props_;
   CoreWorkload &workload_;
   int thread_id_;
   bool is_loading_;
   std::string path_;
-  std::string filename_;
+  std::string workload_props_hash_;
   bool force_generate_;
 
   int fd_;

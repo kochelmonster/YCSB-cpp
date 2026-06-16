@@ -83,6 +83,7 @@ class LeavesDB : public DB {
   size_t mapsize_;
   SingleCursor cursor_;
   leaves::MapConfluenceCursor confluence_cursor_;
+  Fields updated_fields_;
   bool sync_ = false;
   bool binary_key_ = false;
   bool wal_enabled_ = false;
@@ -119,8 +120,12 @@ class LeavesDB : public DB {
   }
 
   void EnsureMutationReady() {
-    if (format_ == kConfluence && !txn_active_ && pending_ == 0) {
-      confluence_cursor_.start_transaction();
+    if (!txn_active_ && pending_ == 0) {
+      if (format_ == kConfluence) {
+        confluence_cursor_.start_transaction();
+      } else {
+        cursor_.start_transaction(wal_enabled_);
+      }
     }
   }
 };

@@ -202,8 +202,22 @@ std::string sha256(std::string input)
 
     char buf[2 * SHA256::DIGEST_SIZE + 1];
     buf[2 * SHA256::DIGEST_SIZE] = 0;
-    for (int i = 0; i < SHA256::DIGEST_SIZE; i++) {
+    for (int i = 0; i < (int)SHA256::DIGEST_SIZE; i++) {
         sprintf(buf + i * 2, "%02x", digest[i]);
     }
     return std::string(buf);
+}
+
+
+void sha256bin(const char* input, std::string& output)
+{
+    unsigned char digest[SHA256::DIGEST_SIZE];
+    memset(digest, 0, SHA256::DIGEST_SIZE);
+
+    SHA256 ctx = SHA256();
+    ctx.init();
+    ctx.update((unsigned char*)input, strlen(input));
+    ctx.final(digest);
+
+    output.assign((char*)digest, SHA256::DIGEST_SIZE);
 }

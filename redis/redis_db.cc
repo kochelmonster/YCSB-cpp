@@ -51,6 +51,9 @@ void RedisDB::Init() {
     CheckReply(reply);
     freeReplyObject(reply);
   }
+
+  argv_.reserve(2 + 2 * 100); // Reserve space for HMSET command with up to 100 fields
+  argvlen_.reserve(2 + 2 * 100);
 }
 
 void RedisDB::Cleanup() {
@@ -87,20 +90,15 @@ DB::Status RedisDB::ReadHashFields(const std::string &redis_key,
   if (fields == nullptr) {
     reply = (redisReply *)redisCommand(context_, "HGETALL %s", redis_key.c_str());
   } else {
-    std::vector<const char *> argv;
-    std::vector<size_t> argvlen;
-    argv.reserve(fields->size() + 2);
-    argvlen.reserve(fields->size() + 2);
-
-    argv.push_back("HMGET");
-    argvlen.push_back(5);
-    argv.push_back(redis_key.c_str());
-    argvlen.push_back(redis_key.size());
+    argv_.push_back("HMGET");
+    argvlen_.push_back(5);
+    argv_.push_back(redis_key.c_str());
+    argvlen_.push_back(redis_key.size());
     for (const auto &field : *fields) {
-      argv.push_back(field.data());
-      argvlen.push_back(field.size());
+      argv_.push_back(field.data());
+      argvlen_.push_back(field.size());
     }
-    reply = (redisReply *)redisCommandArgv(context_, argv.size(), argv.data(), argvlen.data());
+    reply = (redisReply *)redisCommandArgv(context_, argv_.size(), argv_.data(), argvlen_.data());
   }
 
   CheckReply(reply);
@@ -197,25 +195,25 @@ DB::Status RedisDB::Update(const std::string &table, Slice key, const ReadonlyFi
   std::string redis_key = BuildRedisKey(table, key);
   
   // Build HMSET command
-  std::vector<const char*> argv;
-  std::vector<size_t> argvlen;
+  argv_.clear();
+  argvlen_.clear();
   
-  argv.push_back("HMSET");
-  argvlen.push_back(5);
+  argv_.push_back("HMSET");
+  argvlen_.push_back(5);
   
-  argv.push_back(redis_key.c_str());
-  argvlen.push_back(redis_key.length());
+  argv_.push_back(redis_key.c_str());
+  argvlen_.push_back(redis_key.length());
   
   for (auto it = values.begin(); it != values.end(); ++it) {
     auto [name, value] = *it;
-    argv.push_back(name.data());
-    argvlen.push_back(name.size());
-    argv.push_back(value.data());
-    argvlen.push_back(value.size());
+    argv_.push_back(name.data());
+    argvlen_.push_back(name.size());
+    argv_.push_back(value.data());
+    argvlen_.push_back(value.size());
   }
   
-  redisReply *reply = (redisReply *)redisCommandArgv(context_, argv.size(), 
-      argv.data(), argvlen.data());
+  redisReply *reply = (redisReply *)redisCommandArgv(context_, argv_.size(), 
+      argv_.data(), argvlen_.data());
   
   CheckReply(reply);
   

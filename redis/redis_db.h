@@ -40,6 +40,9 @@ class RedisDB : public DB {
   int port_;
   int timeout_ms_;
   bool destroy_;
+  std::vector<const char*> argv_;
+  std::vector<size_t> argvlen_;
+
   
   std::string BuildRedisKey(const std::string &table, Slice key);
   std::string BuildIndexKey(const std::string &table);

@@ -60,6 +60,7 @@ class RocksdbDB : public DB {
     kSingleRow,
   };
   RocksFormat format_;
+  Fields updated_fields_;
 
   void GetOptions(const utils::Properties &props, rocksdb::Options *opt,
                   std::vector<rocksdb::ColumnFamilyDescriptor> *cf_descs);

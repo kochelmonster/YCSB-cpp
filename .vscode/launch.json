@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug YCSB - Leaves Workload A (Load)",
+            "name": "Debug YCSB - Ingest",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build-debug/ycsb",
@@ -15,8 +15,9 @@
                 "-P",
                 "leaves/leaves.properties",
                 "-P",
-                "workloads/workloada",
+                "workloads/workload_kv_ingest",
                 "-load",
+                "-run",
                 "-s"
             ],
             "stopAtEntry": false,
@@ -38,24 +39,18 @@
             ]
         },
         {
-            "name": "Debug YCSB - Leaves Write Workload (Run)",
+            "name": "Debug YCSB - WiredTiger",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build-debug/ycsb",
             "args": [
                 "-load",
                 "-db",
-                "leaves",
+                "wiredtiger",
                 "-P",
-                "leaves/leaves.properties",
+                "wiredtiger/wiredtiger.properties",
                 "-P",
-                "./workloads/workload_kv_analytics_read",
-                "-p",
-                "leaves.binary_key=false",
-                "-p",
-                "leaves.batch_size=64",
-                "-p",
-                "leaves.format=single",
+                "./workloads/workload_kv_session",
                 "-s"
             ],
             "stopAtEntry": false,
@@ -77,7 +72,7 @@
             ]
         },
         {
-            "name": "Debug YCSB - Catch Exceptions (Leaves Workload A)",
+            "name": "Debug YCSB - Leaves",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build-debug/ycsb",
