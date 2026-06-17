@@ -22,7 +22,7 @@ namespace ycsbc {
 
 class BadgerDB : public DB {
  public:
-  BadgerDB() : binary_key_(false) {}
+  BadgerDB() {}
   ~BadgerDB() {}
 
   void Init();
@@ -43,19 +43,8 @@ class BadgerDB : public DB {
   bool SupportsMultiThreadWrite() { return true; }
 
  private:
-  bool binary_key_;
   bool sync_writes_;
-  char key_buf_[8];
   Fields updated_fields_;
-
-  std::string EncodeKey(Slice key) {
-    if (!binary_key_) {
-      return key.ToString();
-    }
-    uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
-    uint64_t be = htobe64(n);
-    return std::string(reinterpret_cast<const char *>(&be), 8);
-  }
 
   static badger_db_t db_;
   static int ref_cnt_;

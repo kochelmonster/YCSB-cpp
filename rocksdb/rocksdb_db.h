@@ -26,7 +26,7 @@ namespace ycsbc {
 
 class RocksdbDB : public DB {
  public:
-  RocksdbDB() : binary_key_(false), batch_size_(1), pending_(0) {}
+  RocksdbDB() : batch_size_(1), pending_(0) {}
   ~RocksdbDB() {}
 
   void Init();
@@ -91,19 +91,10 @@ class RocksdbDB : public DB {
 
   int fieldcount_;
 
-  bool binary_key_;
   int batch_size_;
   int pending_;
   rocksdb::WriteBatch write_batch_;
 
-  std::string EncodeKey(Slice key) {
-    if (!binary_key_) return key.ToString();
-    uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
-    uint64_t be = htobe64(n);
-    std::string result(8, '\0');
-    std::memcpy(result.data(), &be, 8);
-    return result;
-  }
   void FlushBatch() {
     if (pending_ > 0) {
       rocksdb::Status s = db_->Write(wopt_, &write_batch_);

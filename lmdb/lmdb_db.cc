@@ -43,9 +43,6 @@ const std::string PROP_WRITEMAP_DEFAULT = "false";
 const std::string PROP_MAPASYNC = "lmdb.mapasync";
 const std::string PROP_MAPASYNC_DEFAULT = "false";
 
-const std::string PROP_BINARY_KEY = "lmdb.binary_key";
-const std::string PROP_BINARY_KEY_DEFAULT = "false";
-
 const std::string PROP_BATCH_SIZE = "lmdb.batch_size";
 const std::string PROP_BATCH_SIZE_DEFAULT = "1";
 }  // namespace
@@ -63,8 +60,6 @@ std::mutex LmdbDB::mutex_;
 void LmdbDB::Init() {
   const utils::Properties& props = *props_;
 
-  binary_key_ =
-      props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
   batch_size_ =
       std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
   if (batch_size_ < 1) batch_size_ = 1;
@@ -194,7 +189,7 @@ DB::Status LmdbDB::Read(const std::string& table, Slice key,
                         const std::unordered_set<std::string>* fields,
                         Fields& result) {
   DB::Status s = kOK;
-  MDB_val key_slice = EncodeKey(key.ToString());
+  MDB_val key_slice = {key.size(), const_cast<char*>(key.data())};
   MDB_val val_slice;
   int ret;
 
@@ -253,7 +248,7 @@ DB::Status LmdbDB::Scan(const std::string& table, Slice key, int len,
   FlushBatch();
   MDB_txn* txn;
   MDB_cursor* cursor;
-  MDB_val key_slice = EncodeKey(key.ToString());
+  MDB_val key_slice = {key.size(), const_cast<char*>(key.data())};
   MDB_val val_slice;
 
   int ret;
@@ -298,7 +293,7 @@ cleanup:
 DB::Status LmdbDB::Update(const std::string& table, Slice key,
                           const ReadonlyFields& values) {
   FlushBatch();
-  MDB_val key_slice = EncodeKey(key.ToString());
+  MDB_val key_slice = {key.size(), const_cast<char*>(key.data())};
   MDB_val val_slice;
 
   if (!write_txn_) {
@@ -331,7 +326,7 @@ DB::Status LmdbDB::Update(const std::string& table, Slice key,
 
 DB::Status LmdbDB::Insert(const std::string& table, Slice key,
                           const ReadonlyFields& values) {
-  MDB_val key_slice = EncodeKey(key.ToString());
+  MDB_val key_slice = {key.size(), const_cast<char*>(key.data())};
   auto data = values.data();
   MDB_val val_slice;
   val_slice.mv_data = static_cast<void*>(const_cast<char*>(data.data()));
@@ -351,7 +346,7 @@ DB::Status LmdbDB::Insert(const std::string& table, Slice key,
 }
 
 DB::Status LmdbDB::Delete(const std::string& table, Slice key) {
-  MDB_val key_slice = EncodeKey(key.ToString());
+  MDB_val key_slice = {key.size(), const_cast<char*>(key.data())};
 
   if (!write_txn_) {
     int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);

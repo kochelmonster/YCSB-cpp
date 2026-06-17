@@ -23,7 +23,7 @@ namespace ycsbc {
 
 class LmdbDB : public DB {
  public:
-  LmdbDB() : binary_key_(false), batch_size_(1), pending_(0), write_txn_(nullptr), txn_active_(false) {}
+  LmdbDB() : batch_size_(1), pending_(0), write_txn_(nullptr), txn_active_(false) {}
   ~LmdbDB() {}
 
   void Init();
@@ -49,28 +49,12 @@ class LmdbDB : public DB {
   Status RollbackTransaction();
 
  private:
-  bool binary_key_;
   int batch_size_;
   int pending_;
   Fields current_values_;
   MDB_txn *write_txn_;
   bool txn_active_;
-  char key_buf_[8];
 
-  MDB_val EncodeKey(Slice key) {
-    MDB_val k;
-    if (!binary_key_) {
-      k.mv_data = const_cast<void *>(static_cast<const void *>(key.data()));
-      k.mv_size = key.size();
-    } else {
-      uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
-      uint64_t be = htobe64(n);
-      std::memcpy(key_buf_, &be, 8);
-      k.mv_data = key_buf_;
-      k.mv_size = 8;
-    }
-    return k;
-  }
   void FlushBatch() {
     if (txn_active_) return;
     if (pending_ > 0 && write_txn_ != nullptr) {

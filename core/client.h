@@ -54,9 +54,7 @@ inline int ClientThread(ycsbc::DB* db, CoreWorkload* wl, const int num_ops,
           break;
         case CoreWorkload::WorkItem::OpType::READ:
           result_buf.clear();
-          if (db->Read(table, item.key, nullptr, result_buf) != ycsbc::DB::Status::kOK) {
-            std::cout << "Read Error: " << i << ": " << item.key.ToString() << std::endl;
-          }
+          db->Read(table, item.key, nullptr, result_buf);
           break;
         case CoreWorkload::WorkItem::OpType::SCAN:
           scan_result_buf.clear();

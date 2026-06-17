@@ -125,7 +125,7 @@ int main(const int argc, const char* argv[]) {
   ycsbc::DB* writer_db = nullptr;
   std::future<void> writer_future;
 
-  if (dedicated_writer && !dbs[0]->SupportsMultiThreadWrite()) {
+  if (dedicated_writer && !dbs[0]->SupportsMultiThreadWrite() && num_threads > 1) {
     write_queue = new ycsbc::SharedWriteQueue();
     writer_db = ycsbc::DBFactory::CreateDB(&props, measurements);
     if (writer_db == nullptr) {
@@ -301,14 +301,10 @@ int main(const int argc, const char* argv[]) {
       status_future.wait();
     }
 
+    std::cout << measurements->GetStatusMsg() << std::endl;
     std::cout << "Run runtime(sec): " << runtime << std::endl;
     std::cout << "Run operations(ops): " << sum << std::endl;
     std::cout << "Run throughput(ops/sec): " << sum / runtime << std::endl;
-
-    // Cleanup after timing window: flush/close DB outside measured time.
-    for (int i = 0; i < num_threads; i++) {
-      dbs[i]->Cleanup();
-    }
   }
 
   // Shut down the dedicated writer thread

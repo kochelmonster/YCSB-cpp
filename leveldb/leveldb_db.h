@@ -30,7 +30,7 @@ namespace ycsbc {
 
 class LeveldbDB : public DB {
  public:
-  LeveldbDB() : binary_key_(false), sync_(false), batch_size_(1), pending_(0) {}
+  LeveldbDB() : sync_(false), batch_size_(1), pending_(0) {}
   ~LeveldbDB() {}
 
   void Init();
@@ -112,20 +112,11 @@ class LeveldbDB : public DB {
   int fieldcount_;
   std::string field_prefix_;
 
-  bool binary_key_;
   bool sync_;
   int batch_size_;
   int pending_;
   leveldb::WriteBatch write_batch_;
 
-  std::string EncodeKey(Slice key) {
-    if (!binary_key_) return key.ToString();
-    uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
-    uint64_t be = htobe64(n);
-    std::string result(8, '\0');
-    std::memcpy(result.data(), &be, 8);
-    return result;
-  }
   void FlushBatch() {
     if (pending_ > 0) {
       leveldb::WriteOptions wopt;

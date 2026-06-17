@@ -28,7 +28,6 @@ class LeavesDB : public DB {
  public:
   LeavesDB()
       : fieldcount_(0),
-        binary_key_(false),
         batch_size_(1),
         pending_(0),
         txn_active_(false) {}
@@ -85,26 +84,10 @@ class LeavesDB : public DB {
   leaves::MapConfluenceCursor confluence_cursor_;
   Fields updated_fields_;
   bool sync_ = false;
-  bool binary_key_ = false;
   bool wal_enabled_ = false;
   int batch_size_ = 1;
   int pending_;
   bool txn_active_;
-  char key_buf_[8];
-
-  // Encode a YCSB key ("user" + decimal) into a leaves Slice.
-  // Binary mode: strip "user" prefix, parse uint64, store as 8-byte big-endian.
-  // ASCII mode:  use the raw string as-is.
-  leaves::Slice EncodeKey(Slice key) {
-    if (!binary_key_) {
-      return leaves::Slice(key.data(), key.size());
-    }
-    // Skip the "user" prefix (4 bytes)
-    uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
-    uint64_t be = htobe64(n);
-    std::memcpy(key_buf_, &be, 8);
-    return leaves::Slice(key_buf_, 8);
-  }
 
   // Record one mutation; commit when batch is full.
   void CommitMutation() {

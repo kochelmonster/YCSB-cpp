@@ -51,9 +51,6 @@ namespace {
   const std::string PROP_BLOCK_RESTART_INTERVAL = "leveldb.block_restart_interval";
   const std::string PROP_BLOCK_RESTART_INTERVAL_DEFAULT = "0";
 
-  const std::string PROP_BINARY_KEY = "leveldb.binary_key";
-  const std::string PROP_BINARY_KEY_DEFAULT = "false";
-
   const std::string PROP_BATCH_SIZE = "leveldb.batch_size";
   const std::string PROP_BATCH_SIZE_DEFAULT = "1";
 } // anonymous
@@ -96,9 +93,8 @@ void LeveldbDB::Init() {
   fieldcount_ = std::stoi(props.GetProperty(CoreWorkload::FIELD_COUNT_PROPERTY,
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
   field_prefix_ = props.GetProperty(CoreWorkload::FIELD_NAME_PREFIX,
-                                    CoreWorkload::FIELD_NAME_PREFIX_DEFAULT);
+                                      CoreWorkload::FIELD_NAME_PREFIX_DEFAULT);
 
-  binary_key_ = props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
   sync_ = props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true";
   batch_size_ = std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
   if (batch_size_ < 1) batch_size_ = 1;
@@ -216,9 +212,8 @@ DB::Status LeveldbDB::ReadSingleEntry(const std::string &table, Slice key,
                                       const std::unordered_set<std::string> *fields,
                                       Fields &result) {
   FlushBatch();
-  std::string encoded = EncodeKey(key);
   std::string data;
-  leveldb::Status s = db_->Get(leveldb::ReadOptions(), encoded, &data);
+  leveldb::Status s = db_->Get(leveldb::ReadOptions(), leveldb::Slice(key.data(), key.size()), &data);
   if (s.IsNotFound()) {
     return kNotFound;
   } else if (!s.ok()) {
@@ -237,9 +232,8 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, Slice key, int l
                                       const std::unordered_set<std::string> *fields,
                                       std::vector<Fields> &result) {
   FlushBatch();
-  std::string encoded = EncodeKey(key);
   leveldb::Iterator *db_iter = db_->NewIterator(leveldb::ReadOptions());
-  db_iter->Seek(encoded);
+  db_iter->Seek(leveldb::Slice(key.data(), key.size()));
   for (int i = 0; db_iter->Valid() && i < len; i++) {
     std::string data = db_iter->value().ToString();
     result.emplace_back();
@@ -259,9 +253,8 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, Slice key, int l
 DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, Slice key,
                                         const ReadonlyFields &values) {
   FlushBatch();
-  std::string encoded = EncodeKey(key);
   std::string data;
-  leveldb::Status s = db_->Get(leveldb::ReadOptions(), encoded, &data);
+  leveldb::Status s = db_->Get(leveldb::ReadOptions(), leveldb::Slice(key.data(), key.size()), &data);
   if (s.IsNotFound()) {
     return kNotFound;
   } else if (!s.ok()) {
@@ -271,23 +264,21 @@ DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, Slice key,
   updated_fields_ = readonly;
   updated_fields_.update(values);
   const auto& buffer = updated_fields_.buffer();
-  write_batch_.Put(encoded, leveldb::Slice(buffer.data(), buffer.size()));
+  write_batch_.Put(leveldb::Slice(key.data(), key.size()), leveldb::Slice(buffer.data(), buffer.size()));
   CommitMutation();
   return kOK;
 }
 
 DB::Status LeveldbDB::InsertSingleEntry(const std::string &table, Slice key,
                                         const ReadonlyFields &values) {
-  std::string encoded = EncodeKey(key);
   const auto& data = values.data();
-  write_batch_.Put(encoded, leveldb::Slice(data.data(), data.size()));
+  write_batch_.Put(leveldb::Slice(key.data(), key.size()), leveldb::Slice(data.data(), data.size()));
   CommitMutation();
   return kOK;
 }
 
 DB::Status LeveldbDB::DeleteSingleEntry(const std::string &table, Slice key) {
-  std::string encoded = EncodeKey(key);
-  write_batch_.Delete(encoded);
+  write_batch_.Delete(leveldb::Slice(key.data(), key.size()));
   CommitMutation();
   return kOK;
 }
