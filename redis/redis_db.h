@@ -22,17 +22,17 @@ class RedisDB : public DB {
   void Init();
   void Cleanup();
 
-  Status Read(const std::string &table, const std::string &key,
-              const std::unordered_set<std::string> *fields, Fields &result);
+  Status Read(const std::string &table, Slice key,
+               const std::unordered_set<std::string> *fields, Fields &result) override;
 
-  Status Scan(const std::string &table, const std::string &key, int len,
-              const std::unordered_set<std::string> *fields, std::vector<Fields> &result);
+  Status Scan(const std::string &table, Slice key, int len,
+               const std::unordered_set<std::string> *fields, std::vector<Fields> &result) override;
 
-  Status Update(const std::string &table, const std::string &key, Fields &values);
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values) override;
 
-  Status Insert(const std::string &table, const std::string &key, Fields &values);
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values) override;
 
-  Status Delete(const std::string &table, const std::string &key);
+  Status Delete(const std::string &table, Slice key) override;
 
  private:
   redisContext *context_;
@@ -40,15 +40,18 @@ class RedisDB : public DB {
   int port_;
   int timeout_ms_;
   bool destroy_;
+  std::vector<const char*> argv_;
+  std::vector<size_t> argvlen_;
+
   
-  std::string BuildRedisKey(const std::string &table, const std::string &key);
+  std::string BuildRedisKey(const std::string &table, Slice key);
   std::string BuildIndexKey(const std::string &table);
   void CheckReply(redisReply *reply);
   Status ReadHashFields(const std::string &redis_key,
                         const std::unordered_set<std::string> *fields,
                         Fields &result);
-  Status IndexKey(const std::string &table, const std::string &key);
-  Status DeindexKey(const std::string &table, const std::string &key);
+  Status IndexKey(const std::string &table, Slice key);
+  Status DeindexKey(const std::string &table, Slice key);
 };
 
 DB *NewRedisDB();

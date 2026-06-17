@@ -22,6 +22,8 @@ class WTDB : public DB {
 
   void Init();
 
+  // Cleanup the database, closing the session and connection.
+  // This method is idempotent and can be called multiple times.
   void Cleanup();
 
   Status BeginTransaction();
@@ -30,63 +32,63 @@ class WTDB : public DB {
 
   Status RollbackTransaction();
 
-  Status Read(const std::string &table, const std::string &key,
+  Status Read(const std::string &table, Slice key,
               const std::unordered_set<std::string> *fields, Fields &result) {
     return (this->*(method_read_))(table, key, fields, result);
   }
 
-  Status Scan(const std::string &table, const std::string &key, int len,
+  Status Scan(const std::string &table, Slice key, int len,
               const std::unordered_set<std::string> *fields, std::vector<Fields> &result) {
     return (this->*(method_scan_))(table, key, len, fields, result);
   }
 
-  Status Update(const std::string &table, const std::string &key, Fields &values) {
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values) {
     return (this->*(method_update_))(table, key, values);
   }
 
-  Status Insert(const std::string &table, const std::string &key, Fields &values) {
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values) {
     return (this->*(method_insert_))(table, key, values);
   }
 
-  Status Delete(const std::string &table, const std::string &key) {
+  Status Delete(const std::string &table, Slice key) {
     return (this->*(method_delete_))(table, key);
   }
 
  private:
 
-  Status ReadSingleEntry(const std::string &table, const std::string &key,
+  Status ReadSingleEntry(const std::string &table, Slice key,
                          const std::unordered_set<std::string> *fields, Fields &result);
-  Status ScanSingleEntry(const std::string &table, const std::string &key, int len,
+  Status ScanSingleEntry(const std::string &table, Slice key, int len,
                          const std::unordered_set<std::string> *fields,
                          std::vector<Fields> &result);
-  Status UpdateSingleEntry(const std::string &table, const std::string &key,
-                           Fields &values);
-  Status InsertSingleEntry(const std::string &table, const std::string &key,
-                           Fields &values);
-  Status DeleteSingleEntry(const std::string &table, const std::string &key);
+  Status UpdateSingleEntry(const std::string &table, Slice key,
+                           const ReadonlyFields &values);
+  Status InsertSingleEntry(const std::string &table, Slice key,
+                           const ReadonlyFields &values);
+  Status DeleteSingleEntry(const std::string &table, Slice key);
 
-  Status (WTDB::*method_read_)(const std::string &, const std:: string &,
+  Status (WTDB::*method_read_)(const std::string &, Slice,
                                     const std::unordered_set<std::string> *, Fields &);
-  Status (WTDB::*method_scan_)(const std::string &, const std::string &, int,
+  Status (WTDB::*method_scan_)(const std::string &, Slice, int,
                                     const std::unordered_set<std::string> *,
                                     std::vector<Fields> &);
-  Status (WTDB::*method_update_)(const std::string &, const std::string &,
-                                      Fields &);
-  Status (WTDB::*method_insert_)(const std::string &, const std::string &,
-                                      Fields &);
-  Status (WTDB::*method_delete_)(const std::string &, const std::string &);
+  Status (WTDB::*method_update_)(const std::string &, Slice,
+                                      const ReadonlyFields &);
+  Status (WTDB::*method_insert_)(const std::string &, Slice,
+                                      const ReadonlyFields &);
+  Status (WTDB::*method_delete_)(const std::string &, Slice);
 
   static WT_CONNECTION *conn_;
   WT_SESSION *session_{nullptr};
   WT_CURSOR *cursor_{nullptr};
   bool transaction_active_{false};
-
+  Fields current_values_;
   static int ref_cnt_;
   static std::mutex mu_;
 
 };
 
-DB *NewRocksdbDB();
+DB *NewWTDB();
 
 } // namespace ycsbc
 

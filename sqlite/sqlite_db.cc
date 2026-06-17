@@ -203,7 +203,7 @@ void SqliteDB::Cleanup() {
   }
 }
 
-DB::Status SqliteDB::Read(const std::string &table, const std::string &key,
+DB::Status SqliteDB::Read(const std::string &table, Slice key,
                           const std::unordered_set<std::string> *fields, Fields &result) {
   DB::Status s = kOK;
   bool temp = false;
@@ -224,7 +224,7 @@ DB::Status SqliteDB::Read(const std::string &table, const std::string &key,
     stmt = SQLite3Prepare(db_, BuildReadQuery(table_name_, key_, fields_vec));
   }
 
-  int rc = sqlite3_bind_text(stmt, 1, key.c_str(), key.size(), SQLITE_STATIC);
+  int rc = sqlite3_bind_text(stmt, 1, key.data(), key.size(), SQLITE_STATIC);
   if (rc != SQLITE_OK) {
     s = kError;
     goto cleanup;
@@ -252,7 +252,7 @@ cleanup:
   return s;
 }
 
-DB::Status SqliteDB::Scan(const std::string &table, const std::string &key, int len,
+DB::Status SqliteDB::Scan(const std::string &table, Slice key, int len,
                           const std::unordered_set<std::string> *fields, std::vector<Fields> &result) {
   DB::Status s = kOK;
   bool temp = false;
@@ -273,7 +273,7 @@ DB::Status SqliteDB::Scan(const std::string &table, const std::string &key, int 
     stmt = SQLite3Prepare(db_, BuildScanQuery(table_name_, key_, fields_vec));
   }
 
-  int rc = sqlite3_bind_text(stmt, 1, key.c_str(), key.size(), SQLITE_STATIC);
+  int rc = sqlite3_bind_text(stmt, 1, key.data(), key.size(), SQLITE_STATIC);
   if (rc != SQLITE_OK) {
     s = kError;
     goto cleanup;
@@ -313,23 +313,26 @@ cleanup:
   return s;
 }
 
-DB::Status SqliteDB::Update(const std::string &table, const std::string &key, Fields &values) {
+DB::Status SqliteDB::Update(const std::string &table, Slice key, const ReadonlyFields &values) {
+  Fields new_values;
+  new_values = const_cast<ReadonlyFields&>(values);
+
   DB::Status s = kOK;
   bool temp = false;
   sqlite3_stmt *stmt;
-  size_t field_cnt = values.size();
+  size_t field_cnt = new_values.size();
 
   if (field_cnt == field_count_) {
     stmt = stmt_update_all_;
   } else if (field_cnt == 1) {
-    auto it = values.begin();
+    auto it = new_values.begin();
     auto [name, value] = *it;
     stmt = stmt_update_field_[std::string(name.data(), name.size())];
   } else {
     temp = true;
     std::vector<std::string> fields;
     fields.reserve(field_cnt);
-    for (auto it = values.begin(); it != values.end(); ++it) {
+    for (auto it = new_values.begin(); it != new_values.end(); ++it) {
       auto [name, value] = *it;
       fields.push_back(std::string(name.data(), name.size()));
     }
@@ -338,7 +341,7 @@ DB::Status SqliteDB::Update(const std::string &table, const std::string &key, Fi
 
   int rc;
   size_t i = 0;
-  for (auto it = values.begin(); it != values.end(); ++it, ++i) {
+  for (auto it = new_values.begin(); it != new_values.end(); ++it, ++i) {
     auto [name, value] = *it;
     rc = sqlite3_bind_text(stmt, 1+i, value.data(), value.size(), SQLITE_STATIC);
     if (rc != SQLITE_OK) {
@@ -347,7 +350,7 @@ DB::Status SqliteDB::Update(const std::string &table, const std::string &key, Fi
     }
   }
 
-  rc = sqlite3_bind_text(stmt, 1+field_cnt, key.c_str(), key.size(), SQLITE_STATIC);
+  rc = sqlite3_bind_text(stmt, 1+field_cnt, key.data(), key.size(), SQLITE_STATIC);
   if (rc != SQLITE_OK) {
     s = kError;
     goto cleanup;
@@ -370,15 +373,18 @@ cleanup:
 }
 
 
-DB::Status SqliteDB::Insert(const std::string &table, const std::string &key, Fields &values) {
+DB::Status SqliteDB::Insert(const std::string &table, Slice key, const ReadonlyFields &values) {
+  Fields new_values;
+  new_values = const_cast<ReadonlyFields&>(values);
+
   DB::Status s = kOK;
   sqlite3_stmt *stmt = stmt_insert_;
 
-  if (field_count_ != values.size()) {
+  if (field_count_ != new_values.size()) {
     return kError;
   }
 
-  int rc = sqlite3_bind_text(stmt, 1, key.c_str(), key.size(), SQLITE_STATIC);
+  int rc = sqlite3_bind_text(stmt, 1, key.data(), key.size(), SQLITE_STATIC);
   if (rc != SQLITE_OK) {
     s = kError;
     goto cleanup;
@@ -386,7 +392,7 @@ DB::Status SqliteDB::Insert(const std::string &table, const std::string &key, Fi
   
   {
     size_t i = 0;
-    for (auto it = values.begin(); it != values.end(); ++it, ++i) {
+    for (auto it = new_values.begin(); it != new_values.end(); ++it, ++i) {
       auto [name, value] = *it;
       rc = sqlite3_bind_text(stmt, 2+i, value.data(), value.size(), SQLITE_STATIC);
       if (rc != SQLITE_OK) {
@@ -409,11 +415,11 @@ cleanup:
   return s;
 }
 
-DB::Status SqliteDB::Delete(const std::string &table, const std::string &key) {
+DB::Status SqliteDB::Delete(const std::string &table, Slice key) {
   DB::Status s = kOK;
   sqlite3_stmt *stmt = stmt_delete_;
 
-  int rc = sqlite3_bind_text(stmt, 1, key.c_str(), key.size(), SQLITE_STATIC);
+  int rc = sqlite3_bind_text(stmt, 1, key.data(), key.size(), SQLITE_STATIC);
   if (rc != SQLITE_OK) {
     s = kError;
     goto cleanup;

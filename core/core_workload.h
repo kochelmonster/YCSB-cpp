@@ -20,8 +20,11 @@
 #include "acknowledged_counter_generator.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
+#include "utils/fields.h"
 
 namespace ycsbc {
+
+class Dataset;
 
 enum Operation {
   INSERT = 0,
@@ -192,12 +195,12 @@ class CoreWorkload {
   struct WorkItem {
     enum class OpType { INSERT, UPDATE, READ, SCAN, READMODIFYWRITE };
     OpType type;
-    std::string key;
-    Fields values;
+    Slice key;
+    ReadonlyFields values;
     int scan_len{0};
   };
 
-  void PrepareOps(int n, bool is_loading, std::vector<WorkItem> &out);
+  void PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading);
 
   const std::string &table_name() const { return table_name_; }
 
@@ -221,8 +224,11 @@ class CoreWorkload {
     delete transaction_insert_key_sequence_;
   }
 
+  const std::string &GetPropertiesHash() const { return properties_hash_; }
+
  protected:
   static Generator<uint64_t> *GetFieldLenGenerator(const utils::Properties &p);
+  std::string GetPropertiesHash(const utils::Properties &p);
   std::string BuildKeyName(uint64_t key_num);
   void BuildValues(Fields &values);
   void BuildSingleValue(Fields &update);
@@ -254,6 +260,7 @@ class CoreWorkload {
   size_t record_count_;
   int zero_padding_;
   bool explicit_transaction_mode_;
+  std::string properties_hash_;
   
   // Pre-built field names to avoid string construction in hot path
   std::vector<std::string> field_names_;

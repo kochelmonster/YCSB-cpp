@@ -70,7 +70,7 @@ class DB {
   /// @param result A Fields object for the result.
   /// @return Zero on success, or a non-zero error code on error/record-miss.
   ///
-  virtual Status Read(const std::string &table, const std::string &key,
+  virtual Status Read(const std::string &table, Slice key,
                    const std::unordered_set<std::string> *fields,
                    Fields &result) = 0;
   ///
@@ -84,7 +84,7 @@ class DB {
   /// @param result A vector of Fields objects, one per record
   /// @return Zero on success, or a non-zero error code on error.
   ///
-  virtual Status Scan(const std::string &table, const std::string &key,
+  virtual Status Scan(const std::string &table, Slice key,
                    int record_count, const std::unordered_set<std::string> *fields,
                    std::vector<Fields> &result) = 0;
   ///
@@ -97,8 +97,8 @@ class DB {
   /// @param values A Fields object with field/value pairs to update in the record.
   /// @return Zero on success, a non-zero error code on error.
   ///
-  virtual Status Update(const std::string &table, const std::string &key,
-                     Fields &values) = 0;
+  virtual Status Update(const std::string &table, Slice key,
+                     const ReadonlyFields &values) = 0;
   ///
   /// Inserts a record into the database.
   /// Field/value pairs in the specified Fields object are written into the record.
@@ -108,8 +108,8 @@ class DB {
   /// @param values A Fields object with field/value pairs to insert in the record.
   /// @return Zero on success, a non-zero error code on error.
   ///
-  virtual Status Insert(const std::string &table, const std::string &key,
-                     Fields &values) = 0;
+  virtual Status Insert(const std::string &table, Slice key,
+                     const ReadonlyFields &values) = 0;
   ///
   /// Deletes a record from the database.
   ///
@@ -117,7 +117,7 @@ class DB {
   /// @param key The key of the record to delete.
   /// @return Zero on success, a non-zero error code on error.
   ///
-  virtual Status Delete(const std::string &table, const std::string &key) = 0;
+  virtual Status Delete(const std::string &table, Slice key) = 0;
 
   ///
   /// Whether this DB supports concurrent writes from multiple threads.

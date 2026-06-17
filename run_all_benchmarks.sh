@@ -398,6 +398,7 @@ run_benchmark() {
     fi
     cmd+=("-s")
 
+    echo "Command: ${cmd[*]}"
     "${cmd[@]}" | tee "$output_file"
     append_db_size "$db" "$output_file"
 

@@ -23,24 +23,24 @@ namespace ycsbc {
 
 class LmdbDB : public DB {
  public:
-  LmdbDB() : binary_key_(false), batch_size_(1), pending_(0), write_txn_(nullptr), txn_active_(false) {}
+  LmdbDB() : batch_size_(1), pending_(0), write_txn_(nullptr), txn_active_(false) {}
   ~LmdbDB() {}
 
   void Init();
 
   void Cleanup();
 
-  Status Read(const std::string &table, const std::string &key,
+  Status Read(const std::string &table, Slice key,
               const std::unordered_set<std::string> *fields, Fields &result);
 
-  Status Scan(const std::string &table, const std::string &key, int len,
+  Status Scan(const std::string &table, Slice key, int len,
               const std::unordered_set<std::string> *fields, std::vector<Fields> &result);
 
-  Status Update(const std::string &table, const std::string &key, Fields &values);
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values);
 
-  Status Insert(const std::string &table, const std::string &key, Fields &values);
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values);
 
-  Status Delete(const std::string &table, const std::string &key);
+  Status Delete(const std::string &table, Slice key);
 
   bool SupportsMultiThreadWrite() const override { return false; }
 
@@ -49,27 +49,12 @@ class LmdbDB : public DB {
   Status RollbackTransaction();
 
  private:
-  bool binary_key_;
   int batch_size_;
   int pending_;
+  Fields current_values_;
   MDB_txn *write_txn_;
   bool txn_active_;
-  char key_buf_[8];
 
-  MDB_val EncodeKey(const std::string &key) {
-    MDB_val k;
-    if (!binary_key_) {
-      k.mv_data = const_cast<void *>(static_cast<const void *>(key.data()));
-      k.mv_size = key.size();
-    } else {
-      uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
-      uint64_t be = htobe64(n);
-      std::memcpy(key_buf_, &be, 8);
-      k.mv_data = key_buf_;
-      k.mv_size = 8;
-    }
-    return k;
-  }
   void FlushBatch() {
     if (txn_active_) return;
     if (pending_ > 0 && write_txn_ != nullptr) {

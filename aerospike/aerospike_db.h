@@ -25,21 +25,21 @@ class AerospikeDB : public DB {
   void Init() override;
   void Cleanup() override;
   
-  Status Read(const std::string &table, const std::string &key,
-             const std::unordered_set<std::string> *fields,
-             Fields &result) override;
+  Status Read(const std::string &table, Slice key,
+              const std::unordered_set<std::string> *fields,
+              Fields &result) override;
              
-  Status Scan(const std::string &table, const std::string &key, int record_count,
-             const std::unordered_set<std::string> *fields,
-             std::vector<Fields> &result) override;
+  Status Scan(const std::string &table, Slice key, int record_count,
+              const std::unordered_set<std::string> *fields,
+              std::vector<Fields> &result) override;
              
-  Status Update(const std::string &table, const std::string &key,
-               Fields &values) override;
+  Status Update(const std::string &table, Slice key,
+                const ReadonlyFields &values) override;
                
-  Status Insert(const std::string &table, const std::string &key,
-               Fields &values) override;
+  Status Insert(const std::string &table, Slice key,
+                const ReadonlyFields &values) override;
                
-  Status Delete(const std::string &table, const std::string &key) override;
+  Status Delete(const std::string &table, Slice key) override;
 
  private:
   aerospike as_;
@@ -61,7 +61,7 @@ class AerospikeDB : public DB {
   as_policy_write write_policy_;
   as_policy_remove remove_policy_;
   
-  void SetRecord(as_record *rec, Fields &values);
+  void SetRecord(as_record *rec, const ReadonlyFields &values);
   void GetRecord(const as_record *rec, Fields &result,
                  const std::unordered_set<std::string> *fields);
                  

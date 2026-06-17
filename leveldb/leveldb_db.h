@@ -30,32 +30,32 @@ namespace ycsbc {
 
 class LeveldbDB : public DB {
  public:
-  LeveldbDB() : binary_key_(false), sync_(false), batch_size_(1), pending_(0) {}
+  LeveldbDB() : sync_(false), batch_size_(1), pending_(0) {}
   ~LeveldbDB() {}
 
   void Init();
 
   void Cleanup();
 
-  Status Read(const std::string &table, const std::string &key,
-              const std::unordered_set<std::string> *fields, Fields &result) {
+  Status Read(const std::string &table, Slice key,
+               const std::unordered_set<std::string> *fields, Fields &result) override {
     return (this->*(method_read_))(table, key, fields, result);
   }
 
-  Status Scan(const std::string &table, const std::string &key, int len,
-              const std::unordered_set<std::string> *fields, std::vector<Fields> &result) {
+  Status Scan(const std::string &table, Slice key, int len,
+               const std::unordered_set<std::string> *fields, std::vector<Fields> &result) override {
     return (this->*(method_scan_))(table, key, len, fields, result);
   }
 
-  Status Update(const std::string &table, const std::string &key, Fields &values) {
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values) override {
     return (this->*(method_update_))(table, key, values);
   }
 
-  Status Insert(const std::string &table, const std::string &key, Fields &values) {
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values) override {
     return (this->*(method_insert_))(table, key, values);
   }
 
-  Status Delete(const std::string &table, const std::string &key) {
+  Status Delete(const std::string &table, Slice key) override {
     return (this->*(method_delete_))(table, key);
   }
 
@@ -66,65 +66,57 @@ class LeveldbDB : public DB {
     kColumnMajor
   };
   LdbFormat format_;
+  Fields updated_fields_;
 
   void GetOptions(const utils::Properties &props, leveldb::Options *opt);
   std::string BuildCompKey(const std::string &key, const std::string &field_name);
   std::string KeyFromCompKey(const std::string &comp_key);
   std::string FieldFromCompKey(const std::string &comp_key);
 
-  Status ReadSingleEntry(const std::string &table, const std::string &key,
+  Status ReadSingleEntry(const std::string &table, Slice key,
                          const std::unordered_set<std::string> *fields, Fields &result);
-  Status ScanSingleEntry(const std::string &table, const std::string &key, int len,
+  Status ScanSingleEntry(const std::string &table, Slice key, int len,
                          const std::unordered_set<std::string> *fields,
                          std::vector<Fields> &result);
-  Status UpdateSingleEntry(const std::string &table, const std::string &key,
-                           Fields &values);
-  Status InsertSingleEntry(const std::string &table, const std::string &key,
-                           Fields &values);
-  Status DeleteSingleEntry(const std::string &table, const std::string &key);
+  Status UpdateSingleEntry(const std::string &table, Slice key,
+                           const ReadonlyFields &values);
+  Status InsertSingleEntry(const std::string &table, Slice key,
+                           const ReadonlyFields &values);
+  Status DeleteSingleEntry(const std::string &table, Slice key);
 
-  Status ReadCompKeyRM(const std::string &table, const std::string &key,
+  Status ReadCompKeyRM(const std::string &table, Slice key,
                        const std::unordered_set<std::string> *fields, Fields &result);
-  Status ScanCompKeyRM(const std::string &table, const std::string &key, int len,
+  Status ScanCompKeyRM(const std::string &table, Slice key, int len,
                        const std::unordered_set<std::string> *fields,
                        std::vector<Fields> &result);
-  Status ReadCompKeyCM(const std::string &table, const std::string &key,
+  Status ReadCompKeyCM(const std::string &table, Slice key,
                        const std::unordered_set<std::string> *fields, Fields &result);
-  Status ScanCompKeyCM(const std::string &table, const std::string &key, int len,
+  Status ScanCompKeyCM(const std::string &table, Slice key, int len,
                        const std::unordered_set<std::string> *fields,
                        std::vector<Fields> &result);
-  Status InsertCompKey(const std::string &table, const std::string &key,
-                       Fields &values);
-  Status DeleteCompKey(const std::string &table, const std::string &key);
+  Status InsertCompKey(const std::string &table, Slice key,
+                       const ReadonlyFields &values);
+  Status DeleteCompKey(const std::string &table, Slice key);
 
-  Status (LeveldbDB::*method_read_)(const std::string &, const std:: string &,
+  Status (LeveldbDB::*method_read_)(const std::string &, Slice,
                                     const std::unordered_set<std::string> *, Fields &);
-  Status (LeveldbDB::*method_scan_)(const std::string &, const std::string &, int,
+  Status (LeveldbDB::*method_scan_)(const std::string &, Slice, int,
                                     const std::unordered_set<std::string> *,
                                     std::vector<Fields> &);
-  Status (LeveldbDB::*method_update_)(const std::string &, const std::string &,
-                                      Fields &);
-  Status (LeveldbDB::*method_insert_)(const std::string &, const std::string &,
-                                      Fields &);
-  Status (LeveldbDB::*method_delete_)(const std::string &, const std::string &);
+  Status (LeveldbDB::*method_update_)(const std::string &, Slice,
+                                      const ReadonlyFields &);
+  Status (LeveldbDB::*method_insert_)(const std::string &, Slice,
+                                      const ReadonlyFields &);
+  Status (LeveldbDB::*method_delete_)(const std::string &, Slice);
 
   int fieldcount_;
   std::string field_prefix_;
 
-  bool binary_key_;
   bool sync_;
   int batch_size_;
   int pending_;
   leveldb::WriteBatch write_batch_;
 
-  std::string EncodeKey(const std::string &key) {
-    if (!binary_key_) return key;
-    uint64_t n = std::strtoull(key.data() + 4, nullptr, 10);
-    uint64_t be = htobe64(n);
-    std::string result(8, '\0');
-    std::memcpy(result.data(), &be, 8);
-    return result;
-  }
   void FlushBatch() {
     if (pending_ > 0) {
       leveldb::WriteOptions wopt;

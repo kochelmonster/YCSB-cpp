@@ -21,25 +21,25 @@ class NullDB : public DB {
 
   void Cleanup() override {}
 
-  Status Read(const std::string &table, const std::string &key,
+  Status Read(const std::string &table, Slice key,
               const std::unordered_set<std::string> *fields, Fields &result) override {
     return kOK;
   }
 
-  Status Scan(const std::string &table, const std::string &key, int len,
+  Status Scan(const std::string &table, Slice key, int len,
               const std::unordered_set<std::string> *fields, std::vector<Fields> &result) override {
     return kOK;
   }
 
-  Status Update(const std::string &table, const std::string &key, Fields &values) override {
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values) override {
     return kOK;
   }
 
-  Status Insert(const std::string &table, const std::string &key, Fields &values) override {
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values) override {
     return kOK;
   }
 
-  Status Delete(const std::string &table, const std::string &key) override {
+  Status Delete(const std::string &table, Slice key) override {
     return kOK;
   }
 };

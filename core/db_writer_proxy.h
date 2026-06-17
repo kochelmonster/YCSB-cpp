@@ -91,18 +91,15 @@ inline void WriterThreadFunc(DB *writer_db, SharedWriteQueue *queue) {
   try {
     writer_db->Init();
     WriteOp op;
-    Fields values;
     while (queue->Dequeue(op)) {
       switch (op.type) {
         case WriteOp::UPDATE: {
-          ReadonlyFields readonly(op.values_buffer.data(), op.values_buffer.size());
-          values = readonly;
+          ReadonlyFields values(op.values_buffer.data(), op.values_buffer.size());
           writer_db->Update(op.table, op.key, values);
           break;
         }
         case WriteOp::INSERT: {
-          ReadonlyFields readonly(op.values_buffer.data(), op.values_buffer.size());
-          values = readonly;
+          ReadonlyFields values(op.values_buffer.data(), op.values_buffer.size());
           writer_db->Insert(op.table, op.key, values);
           break;
         }
@@ -139,44 +136,44 @@ class DBWriterProxy : public DB {
     read_db_->Cleanup();
   }
 
-  Status Read(const std::string &table, const std::string &key,
+  Status Read(const std::string &table, Slice key,
               const std::unordered_set<std::string> *fields, Fields &result) override {
     return read_db_->Read(table, key, fields, result);
   }
 
-  Status Scan(const std::string &table, const std::string &key, int record_count,
+  Status Scan(const std::string &table, Slice key, int record_count,
               const std::unordered_set<std::string> *fields,
               std::vector<Fields> &result) override {
     return read_db_->Scan(table, key, record_count, fields, result);
   }
 
-  Status Update(const std::string &table, const std::string &key, Fields &values) override {
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values) override {
     WriteOp op;
     op.type = WriteOp::UPDATE;
     op.table = table;
-    op.key = key;
+    op.key = key.ToString();
     auto data = values.data();
     op.values_buffer.assign(data.data(), data.size());
     queue_->Enqueue(std::move(op));
     return kOK;
   }
 
-  Status Insert(const std::string &table, const std::string &key, Fields &values) override {
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values) override {
     WriteOp op;
     op.type = WriteOp::INSERT;
     op.table = table;
-    op.key = key;
+    op.key = key.ToString();
     auto data = values.data();
     op.values_buffer.assign(data.data(), data.size());
     queue_->Enqueue(std::move(op));
     return kOK;
   }
 
-  Status Delete(const std::string &table, const std::string &key) override {
+  Status Delete(const std::string &table, Slice key) override {
     WriteOp op;
     op.type = WriteOp::DELETE_OP;
     op.table = table;
-    op.key = key;
+    op.key = key.ToString();
     queue_->Enqueue(std::move(op));
     return kOK;
   }

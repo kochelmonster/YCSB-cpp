@@ -33,9 +33,6 @@ const std::string PROP_DESTROY_DEFAULT = "false";
 const std::string PROP_SYNC = "leaves.sync";
 const std::string PROP_SYNC_DEFAULT = "false";
 
-const std::string PROP_BINARY_KEY = "leaves.binary_key";
-const std::string PROP_BINARY_KEY_DEFAULT = "false";
-
 const std::string PROP_BATCH_SIZE = "leaves.batch_size";
 const std::string PROP_BATCH_SIZE_DEFAULT = "1";
 
@@ -70,8 +67,6 @@ void LeavesDB::Init() {
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
 
   sync_ = props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true";
-  binary_key_ =
-      props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
   batch_size_ =
       std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
   if (batch_size_ < 1) batch_size_ = 1;
@@ -100,9 +95,9 @@ void LeavesDB::Init() {
     try {
       storage_ =
           std::make_shared<leaves::MapStorage>(dbpath_.c_str(), mapsize_);
-      std::cout << "Leaves stroage initialized: " << dbpath_ << std::endl;
+      std::cout << "Leaves storage initialized: " << dbpath_ << std::endl;
     } catch (const std::exception& e) {
-      std::cerr << "Failed to initialize Leaves stroage: " << e.what()
+      std::cerr << "Failed to initialize Leaves storage: " << e.what()
                 << std::endl;
       throw;
     }
@@ -162,6 +157,13 @@ void LeavesDB::Cleanup() {
   ref_cnt_--;
   if (ref_cnt_ == 0) {
     single_db_.reset();
+
+    if (confluence_db_) {
+      std::cout << "Tributary highwater at cleanup: "
+                << confluence_db_->_internal()->_tributaries_count.load(
+                       std::memory_order_relaxed)
+                << std::endl;
+    }
     confluence_db_.reset();
     storage_.reset();
     std::cout << "Leaves database closed" << std::endl;
@@ -205,7 +207,7 @@ DB::Status LeavesDB::RollbackTransaction() {
   return kOK;
 }
 
-DB::Status LeavesDB::Read(const std::string& /*table*/, const std::string& key,
+DB::Status LeavesDB::Read(const std::string& /*table*/, Slice key,
                           const std::unordered_set<std::string>* fields,
                           Fields& result) {
   try {
@@ -216,7 +218,7 @@ DB::Status LeavesDB::Read(const std::string& /*table*/, const std::string& key,
     if (format_ == kConfluence) {
       FlushPending();
     }
-    leaves::Slice key_slice = EncodeKey(key);
+    leaves::Slice key_slice(key.data(), key.size());
 
     leaves::Slice value_slice;
     if (format_ == kConfluence) {
@@ -254,15 +256,14 @@ DB::Status LeavesDB::Read(const std::string& /*table*/, const std::string& key,
   }
 }
 
-DB::Status LeavesDB::Scan(const std::string& /*table*/, const std::string& key,
-                          int len,
+DB::Status LeavesDB::Scan(const std::string& /*table*/, Slice key, int len,
                           const std::unordered_set<std::string>* fields,
                           std::vector<Fields>& result) {
   try {
     if (format_ == kConfluence) {
       FlushPending();
     }
-    leaves::Slice key_slice = EncodeKey(key);
+    leaves::Slice key_slice(key.data(), key.size());
 
     if (format_ == kConfluence) {
       confluence_cursor_.find(key_slice);
@@ -306,28 +307,23 @@ DB::Status LeavesDB::Scan(const std::string& /*table*/, const std::string& key,
   }
 }
 
-DB::Status LeavesDB::Update(const std::string& /*table*/,
-                            const std::string& key, Fields& values) {
+DB::Status LeavesDB::Update(const std::string& /*table*/, Slice key,
+                            const ReadonlyFields& values) {
   try {
     EnsureMutationReady();
-    leaves::Slice key_slice = EncodeKey(key);
+    leaves::Slice key_slice(key.data(), key.size());
     if (format_ == kConfluence) {
-      // IMPORTANT: call value() BEFORE is_valid() so that _materialize_full()
-      // runs first (searches main DB + all tributaries).  Calling is_valid()
-      // first would invoke _materialize_write() which only checks the write
-      // tributary and clears _pending_find, making the subsequent value() call
-      // a no-op that misses all keys that live in the main DB.
-      // value() before is_valid(): _materialize_full() searches main DB + all
-      // tributaries AND positions the write cursor via _resolve_key(), so no
-      // second find() is needed before the write.
       confluence_cursor_.find(key_slice);
-      leaves::Slice existing_value = confluence_cursor_.value();
       if (!confluence_cursor_.is_valid()) {
         return kNotFound;
       }
+
+      leaves::Slice existing_value = confluence_cursor_.value();
       ReadonlyFields readonly(existing_value.data(), existing_value.size());
-      Slice updated_data = values.update(readonly);
-      leaves::Slice value_slice(updated_data.data(), updated_data.size());
+      updated_fields_ = readonly;
+      updated_fields_.update(values);
+      const auto& buffer = updated_fields_.buffer();
+      leaves::Slice value_slice(buffer.data(), buffer.size());
       confluence_cursor_.value(value_slice);
     } else {
       cursor_.find(key_slice);
@@ -336,8 +332,10 @@ DB::Status LeavesDB::Update(const std::string& /*table*/,
       }
       leaves::Slice existing_value = cursor_.value();
       ReadonlyFields readonly(existing_value.data(), existing_value.size());
-      Slice updated_data = values.update(readonly);
-      leaves::Slice value_slice(updated_data.data(), updated_data.size());
+      updated_fields_ = readonly;
+      updated_fields_.update(values);
+      const auto& buffer = updated_fields_.buffer();
+      leaves::Slice value_slice(buffer.data(), buffer.size());
       cursor_.value(value_slice);
     }
 
@@ -349,18 +347,18 @@ DB::Status LeavesDB::Update(const std::string& /*table*/,
   }
 }
 
-DB::Status LeavesDB::Insert(const std::string& /*table*/,
-                            const std::string& key, Fields& values) {
+DB::Status LeavesDB::Insert(const std::string& /*table*/, Slice key,
+                            const ReadonlyFields& values) {
   try {
     EnsureMutationReady();
-    leaves::Slice key_slice = EncodeKey(key);
+    leaves::Slice key_slice(key.data(), key.size());
     if (format_ == kConfluence) {
       confluence_cursor_.find(key_slice);
     } else {
       cursor_.find(key_slice);
     }
 
-    const std::string& data = values.buffer();
+    const auto& data = values.data();
     leaves::Slice value_slice(data.data(), data.size());
     if (format_ == kConfluence) {
       confluence_cursor_.value(value_slice);
@@ -376,11 +374,10 @@ DB::Status LeavesDB::Insert(const std::string& /*table*/,
   }
 }
 
-DB::Status LeavesDB::Delete(const std::string& /*table*/,
-                            const std::string& key) {
+DB::Status LeavesDB::Delete(const std::string& /*table*/, Slice key) {
   try {
     EnsureMutationReady();
-    leaves::Slice key_slice = EncodeKey(key);
+    leaves::Slice key_slice(key.data(), key.size());
 
     if (format_ == kConfluence) {
       // Same ordering rule as Update(): call value() before is_valid() so

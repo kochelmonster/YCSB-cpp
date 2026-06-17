@@ -17,9 +17,6 @@ namespace {
   const std::string PROP_DBPATH = "badger.dbpath";
   const std::string PROP_DBPATH_DEFAULT = "/tmp/ycsb-badger";
 
-  const std::string PROP_BINARY_KEY = "badger.binary_key";
-  const std::string PROP_BINARY_KEY_DEFAULT = "false";
-
   const std::string PROP_SYNC_WRITES = "badger.sync_writes";
   const std::string PROP_SYNC_WRITES_DEFAULT = "false";
 } // anonymous
@@ -33,7 +30,6 @@ std::mutex BadgerDB::mutex_;
 void BadgerDB::Init() {
   const utils::Properties &props = *props_;
 
-  binary_key_ = props.GetProperty(PROP_BINARY_KEY, PROP_BINARY_KEY_DEFAULT) == "true";
   sync_writes_ = props.GetProperty(PROP_SYNC_WRITES, PROP_SYNC_WRITES_DEFAULT) == "true";
 
   const std::lock_guard<std::mutex> lock(mutex_);
@@ -64,13 +60,12 @@ void BadgerDB::Cleanup() {
   }
 }
 
-DB::Status BadgerDB::Read(const std::string &table, const std::string &key,
+DB::Status BadgerDB::Read(const std::string &table, Slice key,
                           const std::unordered_set<std::string> *fields, Fields &result) {
-  std::string encoded = EncodeKey(key);
   char *val = nullptr;
   size_t val_len = 0;
 
-  int ret = badger_get(db_, const_cast<char *>(encoded.data()), encoded.size(),
+  int ret = badger_get(db_, const_cast<char *>(key.data()), key.size(),
                        &val, &val_len);
   if (ret == BADGER_NOT_FOUND) {
     return kNotFound;
@@ -90,18 +85,17 @@ DB::Status BadgerDB::Read(const std::string &table, const std::string &key,
   return kOK;
 }
 
-DB::Status BadgerDB::Scan(const std::string &table, const std::string &key, int len,
+DB::Status BadgerDB::Scan(const std::string &table, Slice key, int len,
                           const std::unordered_set<std::string> *fields,
                           std::vector<Fields> &result) {
-  std::string encoded = EncodeKey(key);
   char **keys_out = nullptr;
   size_t *key_lens = nullptr;
   char **vals_out = nullptr;
   size_t *val_lens = nullptr;
   int count = 0;
 
-  int ret = badger_scan(db_, const_cast<char *>(encoded.data()), encoded.size(),
-                        len, &keys_out, &key_lens, &vals_out, &val_lens, &count);
+  int ret = badger_scan(db_, const_cast<char *>(key.data()), key.size(),
+                         len, &keys_out, &key_lens, &vals_out, &val_lens, &count);
   if (ret != BADGER_OK) {
     return kError;
   }
@@ -126,13 +120,11 @@ DB::Status BadgerDB::Scan(const std::string &table, const std::string &key, int 
   return kOK;
 }
 
-DB::Status BadgerDB::Update(const std::string &table, const std::string &key, Fields &values) {
-  std::string encoded = EncodeKey(key);
-
+DB::Status BadgerDB::Update(const std::string &table, Slice key, const ReadonlyFields &values) {
   // Read current value
   char *val = nullptr;
   size_t val_len = 0;
-  int ret = badger_get(db_, const_cast<char *>(encoded.data()), encoded.size(),
+  int ret = badger_get(db_, const_cast<char *>(key.data()), key.size(),
                        &val, &val_len);
   if (ret == BADGER_NOT_FOUND) {
     return kNotFound;
@@ -142,26 +134,24 @@ DB::Status BadgerDB::Update(const std::string &table, const std::string &key, Fi
   }
 
   // Merge fields
-  Fields current_values;
   ReadonlyFields readonly(val, val_len);
-  current_values = readonly;
+  updated_fields_ = readonly;
+  updated_fields_.update(values);
   badger_free(val);
 
-  Slice updated_data = current_values.update(values);
-
-  ret = badger_set(db_, const_cast<char *>(encoded.data()), encoded.size(),
-                   const_cast<char *>(updated_data.data()), updated_data.size());
+  const auto& buffer = updated_fields_.buffer();
+  ret = badger_set(db_, const_cast<char *>(key.data()), key.size(),
+                    const_cast<char *>(buffer.data()), buffer.size());
   if (ret != BADGER_OK) {
     return kError;
   }
   return kOK;
 }
 
-DB::Status BadgerDB::Insert(const std::string &table, const std::string &key, Fields &values) {
-  std::string encoded = EncodeKey(key);
-  const std::string &data = values.buffer();
+DB::Status BadgerDB::Insert(const std::string &table, Slice key, const ReadonlyFields &values) {
+  const auto &data = values.data();
 
-  int ret = badger_set(db_, const_cast<char *>(encoded.data()), encoded.size(),
+  int ret = badger_set(db_, const_cast<char *>(key.data()), key.size(),
                        const_cast<char *>(data.data()), data.size());
   if (ret != BADGER_OK) {
     return kError;
@@ -169,10 +159,8 @@ DB::Status BadgerDB::Insert(const std::string &table, const std::string &key, Fi
   return kOK;
 }
 
-DB::Status BadgerDB::Delete(const std::string &table, const std::string &key) {
-  std::string encoded = EncodeKey(key);
-
-  int ret = badger_delete(db_, const_cast<char *>(encoded.data()), encoded.size());
+DB::Status BadgerDB::Delete(const std::string &table, Slice key) {
+  int ret = badger_delete(db_, const_cast<char *>(key.data()), key.size());
   if (ret == BADGER_NOT_FOUND) {
     return kNotFound;
   }
