@@ -11,8 +11,8 @@
 # Request distribution: zipfian
 # Threads: 8
 
-recordcount=2000000
-operationcount=2000000
+recordcount=5000000
+operationcount=5000000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 threadcount=8
 
@@ -29,7 +29,7 @@ insertorder=hashed
 hashalgo=sha256
 
 # Leaves-specific: keep tributaries small so N-way reads stay cheap.
-leaves.merge_threshold=75000
+leaves.merge_threshold=64
 leaves.format=confluence
 
 # RocksDB: enlarge block cache from 512MB to 2GB.

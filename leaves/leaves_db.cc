@@ -64,7 +64,7 @@ void LeavesDB::Init() {
   mapsize_ = std::stoull(props.GetProperty(PROP_MAPSIZE, PROP_MAPSIZE_DEFAULT));
 
   fieldcount_ = std::stoi(props.GetProperty(CoreWorkload::FIELD_COUNT_PROPERTY,
-                                              CoreWorkload::FIELD_COUNT_DEFAULT));
+                                            CoreWorkload::FIELD_COUNT_DEFAULT));
 
   sync_ = props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true";
   batch_size_ =
@@ -157,6 +157,13 @@ void LeavesDB::Cleanup() {
   ref_cnt_--;
   if (ref_cnt_ == 0) {
     single_db_.reset();
+
+    if (confluence_db_) {
+      std::cout << "Tributary highwater at cleanup: "
+                << confluence_db_->_internal()->_tributaries_count.load(
+                       std::memory_order_relaxed)
+                << std::endl;
+    }
     confluence_db_.reset();
     storage_.reset();
     std::cout << "Leaves database closed" << std::endl;

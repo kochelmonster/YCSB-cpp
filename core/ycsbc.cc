@@ -209,6 +209,7 @@ int main(const int argc, const char* argv[]) {
       status_future.wait();
     }
 
+    std::cout << measurements->GetStatusMsg() << std::endl;
     std::cout << "Load runtime(sec): " << runtime << std::endl;
     std::cout << "Load operations(ops): " << sum << std::endl;
     std::cout << "Load throughput(ops/sec): " << sum / runtime << std::endl;
