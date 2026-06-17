@@ -17,9 +17,9 @@
 namespace ycsbc {
 
 struct Meta {
-  uint32_t next_record_offset;
-  uint32_t key_offset;
-  uint32_t op_specific_data_offset;
+  uint64_t next_record_offset;
+  uint64_t key_offset;
+  uint64_t op_specific_data_offset;
 };
 
 class Dataset {

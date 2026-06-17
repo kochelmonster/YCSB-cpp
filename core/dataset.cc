@@ -98,8 +98,17 @@ void Dataset::DEBUG(int op_count) {
         break;
     }
 
-    std::cout << "Testitem" << i << ": " << type_str << " " << item.key.ToString() << " with "
-              << values.size() << " fields" << std::endl;
+#if 0
+    std::cout << "Testitem: " << i << ": " << type_str << " " << item.key.size() << " with "
+              << values.size() << " fields" << "  size: " << values.data().size() << std::endl;
+#endif
+
+    if (values.data().size() > 2048) {
+      std::cout << "Error Testitem: " << i << ": " << type_str << " " << item.key.size() << " with "
+              << values.size() << " fields" << "  size: " << values.data().size() << std::endl;
+      throw std::runtime_error("Field data size exceeds 2048 bytes");
+    }
+      
 #if 0
     ReadonlyFields readonly(values);
     // check correctnes of the values
@@ -145,8 +154,8 @@ const CoreWorkload::WorkItem& Dataset::Next() {
       static_cast<CoreWorkload::WorkItem::OpType>(*current_);
   current_++;
 
-  uint32_t meta_len = *reinterpret_cast<uint32_t*>(current_);
-  current_ += sizeof(uint32_t);
+  uint64_t meta_len = *reinterpret_cast<uint64_t*>(current_);
+  current_ += sizeof(uint64_t);
 
   const Meta* meta = reinterpret_cast<const Meta*>(current_);
   current_ += meta_len;

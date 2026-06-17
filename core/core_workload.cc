@@ -507,12 +507,12 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
 
     Meta meta;
     meta.key_offset = ofs.tellp();
-    meta.key_offset += sizeof(char) + sizeof(uint32_t) + sizeof(Meta);
+    meta.key_offset += sizeof(char) + sizeof(uint64_t) + sizeof(Meta);
     meta.op_specific_data_offset = meta.key_offset + sizeof(uint32_t) + key_len;
     meta.next_record_offset = meta.op_specific_data_offset + op_specific_data_len;
-
+    
     ofs.put(static_cast<char>(item.type));
-    uint32_t meta_len = sizeof(Meta);
+    uint64_t meta_len = sizeof(Meta);
     ofs.write(reinterpret_cast<const char*>(&meta_len), sizeof(meta_len));
     ofs.write(reinterpret_cast<const char*>(&meta), sizeof(meta));
 

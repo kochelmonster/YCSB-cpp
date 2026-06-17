@@ -7,8 +7,8 @@
 # Read/update ratio: 50/50
 # Request distribution: zipfian
 
-recordcount=1000000
-operationcount=1000000
+recordcount=5000000
+operationcount=5000000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
 readallfields=true
