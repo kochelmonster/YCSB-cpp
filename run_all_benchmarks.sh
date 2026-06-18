@@ -6,13 +6,14 @@
 #   MATRIX_MODE=throughput  -> default engine settings
 #   MATRIX_MODE=durability  -> stricter durability-oriented settings
 #
-# Scenario coverage (Option 2 delivery):
+# Scenario coverage:
 #   - baseline
-#   - binary_key
 #   - batch_insert_{1,8,32,64}
 #   - batch_update_{1,8,32,64}
 #   - acid_aci
 #   - acid_txn
+#   - concurrent_write / concurrent_session
+#   - value_size_{100,1024,4096}
 
 set -e
 
@@ -43,7 +44,6 @@ BASE_WORKLOADS=(
 
 SCENARIOS=(
     "baseline"
-    "binary_key"
     "batch_insert_1"
     "batch_insert_8"
     "batch_insert_32"
@@ -56,6 +56,9 @@ SCENARIOS=(
     "acid_txn"
     "concurrent_write"
     "concurrent_session"
+    "value_size_100"
+    "value_size_1024"
+    "value_size_4096"
 )
 
 if [ -n "${BENCHMARK_SCENARIOS:-}" ]; then
@@ -83,15 +86,15 @@ echo "========================================"
 
 ENTRY_SCENARIO=()
 ENTRY_BATCH=()
-ENTRY_BINARY=()
 ENTRY_WORKLOAD=()
 ENTRY_DB=()
 ENTRY_LOAD_FILE=()
 ENTRY_RUN_FILE=()
 ENTRY_RUN_MEDIAN_TP=()
 ENTRY_RUN_ALL_TPS=()  # space-separated list of per-repeat throughputs
+FAILED_RUNS=()  # each element: "db scenario workload phase"
 
-supports_binary_key() {
+supports_batch_size() {
     local db=$1
     case "$db" in
         leaves|lmdb|leveldb|rocksdb)
@@ -99,22 +102,6 @@ supports_binary_key() {
             ;;
         *)
             return 1
-            ;;
-    esac
-}
-
-supports_batch_size() {
-    supports_binary_key "$1"
-}
-
-scenario_binary_key() {
-    local scenario=$1
-    case "$scenario" in
-        binary_key|batch_insert_*|batch_update_*)
-            echo "true"
-            ;;
-        *)
-            echo "false"
             ;;
     esac
 }
@@ -140,7 +127,7 @@ scenario_workloads() {
     fi
 
     case "$scenario" in
-        baseline|binary_key)
+        baseline)
             echo "${BASE_WORKLOADS[*]}"
             ;;
         batch_insert_*)
@@ -155,12 +142,15 @@ scenario_workloads() {
         acid_txn)
             echo "workload_kv_acid_txn"
             ;;
-        concurrent_write)
-            echo "workload_kv_concurrent_write"
-            ;;
-        concurrent_session)
-            echo "workload_kv_concurrent_session"
-            ;;
+    concurrent_write)
+        echo "workload_kv_concurrent_write"
+        ;;
+    concurrent_session)
+        echo "workload_kv_concurrent_session"
+        ;;
+    value_size_100|value_size_1024|value_size_4096)
+        echo "workload_kv_session"
+        ;;
         *)
             echo "${BASE_WORKLOADS[*]}"
             ;;
@@ -222,15 +212,33 @@ db_mode_args() {
     fi
 }
 
+scenario_fieldlength() {
+    local scenario=$1
+    case "$scenario" in
+        value_size_100)
+            echo "100"
+            ;;
+        value_size_1024)
+            echo "1024"
+            ;;
+        value_size_4096)
+            echo "4096"
+            ;;
+        *)
+            echo "0"
+            ;;
+    esac
+}
+
 scenario_db_args() {
     local db=$1
     local scenario=$2
     local phase=${3:-run}
-    local binary_key
     local batch_size
     local leaves_format="single"
-    binary_key=$(scenario_binary_key "$scenario")
+    local fieldlength
     batch_size=$(scenario_batch_size "$scenario")
+    fieldlength=$(scenario_fieldlength "$scenario")
 
     if [ "$db" = "leaves" ] && [[ "$scenario" == concurrent_* ]]; then
         leaves_format="confluence"
@@ -245,14 +253,14 @@ scenario_db_args() {
         return 2
     fi
 
-    if [ "$binary_key" = "true" ] && ! supports_binary_key "$db"; then
+    if [[ "$scenario" == batch_* ]] && ! supports_batch_size "$db"; then
         echo ""
         return 2
     fi
 
-    if [[ "$scenario" == batch_* ]] && ! supports_batch_size "$db"; then
-        echo ""
-        return 2
+    local fl_args=""
+    if [ "$fieldlength" -gt 0 ]; then
+        fl_args="-p fieldlength=${fieldlength} -p fieldcount=1"
     fi
 
     local dw_args=""
@@ -263,9 +271,9 @@ scenario_db_args() {
     case "$db" in
         leaves|leveldb|rocksdb|lmdb)
             if [ "$db" = "leaves" ]; then
-                echo "-p ${db}.binary_key=${binary_key} -p ${db}.batch_size=${batch_size} -p leaves.format=${leaves_format} ${dw_args}"
+                echo "-p ${db}.batch_size=${batch_size} -p leaves.format=${leaves_format} ${fl_args} ${dw_args}"
             else
-                echo "-p ${db}.binary_key=${binary_key} -p ${db}.batch_size=${batch_size} ${dw_args}"
+                echo "-p ${db}.batch_size=${batch_size} ${fl_args} ${dw_args}"
             fi
             ;;
         redis|dragonfly)
@@ -276,7 +284,7 @@ scenario_db_args() {
             fi
             ;;
         *)
-            echo "${dw_args}"
+            echo "${fl_args} ${dw_args}"
             ;;
     esac
 
@@ -466,9 +474,9 @@ generate_matrix_csv() {
     local durability_csv="$RESULTS_DIR/durability_session_matrix_${TIMESTAMP}.csv"
     local i
 
-    echo "scenario,batch_size,binary_key,workload,database,load_throughput_ops_sec,run_throughput_ops_sec" > "$throughput_csv"
+    echo "scenario,batch_size,workload,database,load_throughput_ops_sec,run_throughput_ops_sec" > "$throughput_csv"
     if [ "$MATRIX_MODE" = "durability" ]; then
-        echo "scenario,batch_size,binary_key,workload,database,load_throughput_ops_sec,run_throughput_ops_sec" > "$durability_csv"
+        echo "scenario,batch_size,workload,database,load_throughput_ops_sec,run_throughput_ops_sec" > "$durability_csv"
     fi
 
     for ((i=0; i<${#ENTRY_DB[@]}; i++)); do
@@ -482,10 +490,10 @@ generate_matrix_csv() {
             continue
         fi
 
-        echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_BINARY[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${load_tp},${run_tp}" >> "$throughput_csv"
+        echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${load_tp},${run_tp}" >> "$throughput_csv"
 
         if [ "$MATRIX_MODE" = "durability" ] && [ "${ENTRY_SCENARIO[$i]}" = "baseline" ] && [ "${ENTRY_WORKLOAD[$i]}" = "workload_kv_session" ]; then
-            echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_BINARY[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${load_tp},${run_tp}" >> "$durability_csv"
+            echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${load_tp},${run_tp}" >> "$durability_csv"
         fi
     done
 
@@ -516,6 +524,7 @@ for db in "${DATABASES[@]}"; do
             fi
 
             if ! run_benchmark "$db" "$scenario" "$workload" "load"; then
+                FAILED_RUNS+=("$db $scenario $workload load")
                 continue
             fi
             load_file="$LAST_OUTPUT_FILE"
@@ -526,6 +535,7 @@ for db in "${DATABASES[@]}"; do
                 repeat_suffix=""
                 [ "$BENCHMARK_REPEATS" -gt 1 ] && repeat_suffix="_r${r}"
                 if ! run_benchmark "$db" "$scenario" "$workload" "run" "$repeat_suffix"; then
+                    FAILED_RUNS+=("$db $scenario $workload run")
                     break
                 fi
                 last_run_file="$LAST_OUTPUT_FILE"
@@ -539,7 +549,6 @@ for db in "${DATABASES[@]}"; do
 
             ENTRY_SCENARIO+=("$scenario")
             ENTRY_BATCH+=("$(scenario_batch_size "$scenario")")
-            ENTRY_BINARY+=("$(scenario_binary_key "$scenario")")
             ENTRY_WORKLOAD+=("$workload")
             ENTRY_DB+=("$db")
             ENTRY_LOAD_FILE+=("$load_file")
@@ -566,6 +575,17 @@ echo "========================================"
 
 summarize_results
 generate_matrix_csv
+
+if [ ${#FAILED_RUNS[@]} -gt 0 ]; then
+    echo ""
+    echo "========================================"
+    echo "FAILED RUNS (${#FAILED_RUNS[@]} total):"
+    echo "========================================"
+    for fail in "${FAILED_RUNS[@]}"; do
+        echo "  - $fail"
+    done
+    echo "========================================"
+fi
 
 echo ""
 echo "To view results:"

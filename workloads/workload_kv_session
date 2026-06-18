@@ -28,10 +28,6 @@ leaves.batch_size=64
 lmdb.batch_size=64
 leveldb.batch_size=64
 rocksdb.batch_size=64
-leaves.binary_key=true
-lmdb.binary_key=true
-leveldb.binary_key=true
-rocksdb.binary_key=true
 
 # RocksDB / LevelDB: increase block cache to cover the full 1M-record dataset (~1GB).
 # Default 512MB gives ~50% hit rate; 1GB captures the entire working set.

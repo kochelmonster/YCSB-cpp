@@ -38,7 +38,7 @@ hashalgo=sha256
 # Verified 2026-06-09: 5M records, 5M ops, 8 threads, 256GB mapsize:
 #   threshold=400000 → load=299K, run=38K ops/sec
 leaves.format=confluence
-leaves.merge_threshold=30000
+leaves.merge_threshold=60000
 
 # RocksDB: add a 2GB block cache.
 # 5M×1KB records = 5GB dataset; reads are only 10% of ops but still benefit
