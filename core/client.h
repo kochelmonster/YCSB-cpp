@@ -22,14 +22,9 @@
 namespace ycsbc {
 
 inline int ClientThread(ycsbc::DB* db, CoreWorkload* wl, const int num_ops,
-                        bool init_db, bool cleanup_db,
                         utils::CountDownLatch* latch, utils::RateLimiter* rlim,
                         ycsbc::Dataset* dataset) {
   try {
-    if (init_db) {
-      db->Init();
-    }
-
     int ops = 0;
 
     // Pre-generated path: hot loop contains only DB calls, no key/value
@@ -70,12 +65,8 @@ inline int ClientThread(ycsbc::DB* db, CoreWorkload* wl, const int num_ops,
     }
 
     // Flush any pending writes (e.g. partial batch) so locks are released
-    // before this thread exits, even if cleanup_db is false.
+    // before this thread exits.
     db->FlushPending();
-
-    if (cleanup_db) {
-      db->Cleanup();
-    }
 
     latch->CountDown();
     return ops;

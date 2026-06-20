@@ -183,6 +183,11 @@ int main(const int argc, const char* argv[]) {
     ycsbc::utils::CountDownLatch latch(num_threads);
     ycsbc::utils::Timer<double> timer;
 
+    // Initialize DB before the timed window
+    for (int i = 0; i < num_threads; ++i) {
+      dbs[i]->Init();
+    }
+
     timer.Start();
     std::future<void> status_future;
     if (show_status) {
@@ -193,7 +198,7 @@ int main(const int argc, const char* argv[]) {
     for (int i = 0; i < num_threads; ++i) {
       client_threads.emplace_back(
           std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                     load_thread_ops[i], true, !do_transaction, &latch, nullptr,
+                     load_thread_ops[i], &latch, nullptr,
                      load_datasets[i].get()));
     }
     assert((int)client_threads.size() == num_threads);
@@ -213,6 +218,13 @@ int main(const int argc, const char* argv[]) {
     std::cout << "Load runtime(sec): " << runtime << std::endl;
     std::cout << "Load operations(ops): " << sum << std::endl;
     std::cout << "Load throughput(ops/sec): " << sum / runtime << std::endl;
+
+    // Cleanup after the timed window, only if no transaction phase follows
+    if (!do_transaction) {
+      for (int i = 0; i < num_threads; ++i) {
+        dbs[i]->Cleanup();
+      }
+    }
   }
 
   // Drain the write queue between phases
@@ -262,6 +274,13 @@ int main(const int argc, const char* argv[]) {
     ycsbc::utils::CountDownLatch latch(num_threads);
     ycsbc::utils::Timer<double> timer;
 
+    // Initialize DB before the timed window (only if load phase was not run)
+    if (!do_load) {
+      for (int i = 0; i < num_threads; ++i) {
+        dbs[i]->Init();
+      }
+    }
+
     timer.Start();
     std::future<void> status_future;
     if (show_status) {
@@ -279,7 +298,7 @@ int main(const int argc, const char* argv[]) {
       rate_limiters.push_back(rlim);
       client_threads.emplace_back(
           std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                     txn_thread_ops[i], !do_load, true, &latch, rlim,
+                     txn_thread_ops[i], &latch, rlim,
                      txn_datasets[i].get()));
     }
 
@@ -306,6 +325,11 @@ int main(const int argc, const char* argv[]) {
     std::cout << "Run runtime(sec): " << runtime << std::endl;
     std::cout << "Run operations(ops): " << sum << std::endl;
     std::cout << "Run throughput(ops/sec): " << sum / runtime << std::endl;
+
+    // Cleanup after the timed window
+    for (int i = 0; i < num_threads; ++i) {
+      dbs[i]->Cleanup();
+    }
   }
 
   // Shut down the dedicated writer thread

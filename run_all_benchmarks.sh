@@ -88,11 +88,9 @@ ENTRY_SCENARIO=()
 ENTRY_BATCH=()
 ENTRY_WORKLOAD=()
 ENTRY_DB=()
-ENTRY_LOAD_FILE=()
 ENTRY_RUN_FILE=()
 ENTRY_RUN_MEDIAN_TP=()
 ENTRY_RUN_ALL_TPS=()  # space-separated list of per-repeat throughputs
-FAILED_RUNS=()  # each element: "db scenario workload phase"
 
 supports_batch_size() {
     local db=$1
@@ -235,14 +233,9 @@ scenario_db_args() {
     local scenario=$2
     local phase=${3:-run}
     local batch_size
-    local leaves_format="single"
     local fieldlength
     batch_size=$(scenario_batch_size "$scenario")
     fieldlength=$(scenario_fieldlength "$scenario")
-
-    if [ "$db" = "leaves" ] && [[ "$scenario" == concurrent_* ]]; then
-        leaves_format="confluence"
-    fi
 
     if [ "$phase" = "load" ] && supports_batch_size "$db"; then
         batch_size="$LOAD_BATCH_SIZE"
@@ -270,11 +263,11 @@ scenario_db_args() {
 
     case "$db" in
         leaves|leveldb|rocksdb|lmdb)
-            if [ "$db" = "leaves" ]; then
-                echo "-p ${db}.batch_size=${batch_size} -p leaves.format=${leaves_format} ${fl_args} ${dw_args}"
-            else
-                echo "-p ${db}.batch_size=${batch_size} ${fl_args} ${dw_args}"
+            local bs_args=""
+            if [[ "$scenario" != concurrent_* ]]; then
+                bs_args="-p ${db}.batch_size=${batch_size}"
             fi
+            echo "${bs_args} ${fl_args} ${dw_args}"
             ;;
         redis|dragonfly)
             if [ "$phase" = "load" ]; then
@@ -422,13 +415,14 @@ extract_phase_throughput() {
     local file=$1
     local phase_label=$2
 
-    if [ ! -f "$file" ]; then
+    if [ ! -f "$file" ] || [ ! -s "$file" ]; then
         echo ""
         return
     fi
 
     sed -n "s/^${phase_label} throughput(ops\\/sec):[[:space:]]*//p" "$file" | tail -n1
 }
+
 compute_median() {
     # Args: one or more numbers; prints their median.
     printf '%s\n' "$@" | sort -n | awk '
@@ -440,6 +434,7 @@ compute_median() {
             else printf "%.6g\n", (a[c/2-1]+a[c/2])/2
         }'
 }
+
 summarize_results() {
     local summary_file="$RESULTS_DIR/benchmark_summary_${TIMESTAMP}.txt"
     local i
@@ -453,7 +448,6 @@ summarize_results() {
 
     for ((i=0; i<${#ENTRY_DB[@]}; i++)); do
         echo "=== ${ENTRY_DB[$i]} | ${ENTRY_SCENARIO[$i]} | ${ENTRY_WORKLOAD[$i]} ===" >> "$summary_file"
-        grep -E "Load runtime|Load throughput|0 sec: .*\[INSERT:" "${ENTRY_LOAD_FILE[$i]}" >> "$summary_file" 2>/dev/null || true
         grep -E "Run runtime|Run throughput|0 sec: .*operations;" "${ENTRY_RUN_FILE[$i]}" >> "$summary_file" 2>/dev/null || true
         if [ "$BENCHMARK_REPEATS" -gt 1 ] && [ -n "${ENTRY_RUN_ALL_TPS[$i]:-}" ]; then
             read -r -a all_tps <<< "${ENTRY_RUN_ALL_TPS[$i]}"
@@ -474,26 +468,24 @@ generate_matrix_csv() {
     local durability_csv="$RESULTS_DIR/durability_session_matrix_${TIMESTAMP}.csv"
     local i
 
-    echo "scenario,batch_size,workload,database,load_throughput_ops_sec,run_throughput_ops_sec" > "$throughput_csv"
+    echo "scenario,batch_size,workload,database,run_throughput_ops_sec" > "$throughput_csv"
     if [ "$MATRIX_MODE" = "durability" ]; then
-        echo "scenario,batch_size,workload,database,load_throughput_ops_sec,run_throughput_ops_sec" > "$durability_csv"
+        echo "scenario,batch_size,workload,database,run_throughput_ops_sec" > "$durability_csv"
     fi
 
     for ((i=0; i<${#ENTRY_DB[@]}; i++)); do
-        local load_tp
         local run_tp
-        load_tp=$(extract_phase_throughput "${ENTRY_LOAD_FILE[$i]}" "Load")
         run_tp="${ENTRY_RUN_MEDIAN_TP[$i]}"
         [ -z "$run_tp" ] && run_tp=$(extract_phase_throughput "${ENTRY_RUN_FILE[$i]}" "Run")
 
-        if [ -z "$load_tp" ] || [ -z "$run_tp" ]; then
+        if [ -z "$run_tp" ]; then
             continue
         fi
 
-        echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${load_tp},${run_tp}" >> "$throughput_csv"
+        echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${run_tp}" >> "$throughput_csv"
 
         if [ "$MATRIX_MODE" = "durability" ] && [ "${ENTRY_SCENARIO[$i]}" = "baseline" ] && [ "${ENTRY_WORKLOAD[$i]}" = "workload_kv_session" ]; then
-            echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${load_tp},${run_tp}" >> "$durability_csv"
+            echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${run_tp}" >> "$durability_csv"
         fi
     done
 
@@ -502,6 +494,8 @@ generate_matrix_csv() {
         echo "Durability session CSV saved to: $durability_csv"
     fi
 }
+
+# ------- main loop -------
 
 echo "Starting comprehensive benchmark across ${#DATABASES[@]} databases and ${#SCENARIOS[@]} scenarios..."
 echo ""
@@ -523,36 +517,45 @@ for db in "${DATABASES[@]}"; do
                 continue
             fi
 
-            if ! run_benchmark "$db" "$scenario" "$workload" "load"; then
-                FAILED_RUNS+=("$db $scenario $workload load")
-                continue
-            fi
-            load_file="$LAST_OUTPUT_FILE"
-
             run_tputs=()
             last_run_file=""
             for ((r=1; r<=BENCHMARK_REPEATS; r++)); do
-                repeat_suffix=""
-                [ "$BENCHMARK_REPEATS" -gt 1 ] && repeat_suffix="_r${r}"
+                # Check if this repeat already exists (for resume)
+                existing_run_log=$(ls -t "$RESULTS_DIR/${db}_${scenario}_${workload}_run_r${r}_"*.log 2>/dev/null | head -1)
+                if [ -n "$existing_run_log" ]; then
+                    _tp=$(extract_phase_throughput "$existing_run_log" "Run")
+                    if [ -n "$_tp" ]; then
+                        echo "Skipping already completed: $db $scenario $workload repeat $r"
+                        run_tputs+=("$_tp")
+                        [ -z "$last_run_file" ] && last_run_file="$existing_run_log"
+                        continue
+                    fi
+                fi
+
+                # Clean database, load, then run (load log is discarded)
+                if ! run_benchmark "$db" "$scenario" "$workload" "load"; then
+                    echo "WARNING: load phase failed for $db $scenario $workload"
+                    continue 2
+                fi
+
+                repeat_suffix="_r${r}"
                 if ! run_benchmark "$db" "$scenario" "$workload" "run" "$repeat_suffix"; then
-                    FAILED_RUNS+=("$db $scenario $workload run")
-                    break
+                    echo "WARNING: run phase failed for $db $scenario $workload (repeat $r)"
+                    continue 2
                 fi
                 last_run_file="$LAST_OUTPUT_FILE"
                 tp=$(extract_phase_throughput "$last_run_file" "Run")
                 [ -n "$tp" ] && run_tputs+=("$tp")
             done
 
-            [ -z "$last_run_file" ] && continue
-            run_file="$last_run_file"
+            [ "${#run_tputs[@]}" -eq 0 ] && continue
             median_tp=$(compute_median "${run_tputs[@]}")
 
             ENTRY_SCENARIO+=("$scenario")
             ENTRY_BATCH+=("$(scenario_batch_size "$scenario")")
             ENTRY_WORKLOAD+=("$workload")
             ENTRY_DB+=("$db")
-            ENTRY_LOAD_FILE+=("$load_file")
-            ENTRY_RUN_FILE+=("$run_file")
+            ENTRY_RUN_FILE+=("$last_run_file")
             ENTRY_RUN_MEDIAN_TP+=("$median_tp")
             ENTRY_RUN_ALL_TPS+=("${run_tputs[*]}")
 
@@ -575,17 +578,6 @@ echo "========================================"
 
 summarize_results
 generate_matrix_csv
-
-if [ ${#FAILED_RUNS[@]} -gt 0 ]; then
-    echo ""
-    echo "========================================"
-    echo "FAILED RUNS (${#FAILED_RUNS[@]} total):"
-    echo "========================================"
-    for fail in "${FAILED_RUNS[@]}"; do
-        echo "  - $fail"
-    done
-    echo "========================================"
-fi
 
 echo ""
 echo "To view results:"
