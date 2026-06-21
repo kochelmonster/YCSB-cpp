@@ -48,7 +48,7 @@ void RedisDB::Init() {
   
   if (destroy_) {
     redisReply *reply = (redisReply *)redisCommand(context_, "FLUSHDB");
-    CheckReply(reply);
+    CheckReply(reply, "Init");
     freeReplyObject(reply);
   }
 
@@ -71,14 +71,14 @@ std::string RedisDB::BuildIndexKey(const std::string &table) {
   return table + ":__index__";
 }
 
-void RedisDB::CheckReply(redisReply *reply) {
+void RedisDB::CheckReply(redisReply *reply, const std::string &source) {
   if (reply == nullptr) {
-    throw utils::Exception("Redis error: NULL reply");
+    throw utils::Exception("Redis error [" + source + "]: NULL reply");
   }
   if (reply->type == REDIS_REPLY_ERROR) {
     std::string message = reply->str ? reply->str : "unknown Redis error";
     freeReplyObject(reply);
-    throw utils::Exception("Redis error: " + message);
+    throw utils::Exception("Redis error [" + source + "]: " + message);
   }
 }
 
@@ -101,7 +101,7 @@ DB::Status RedisDB::ReadHashFields(const std::string &redis_key,
     reply = (redisReply *)redisCommandArgv(context_, argv_.size(), argv_.data(), argvlen_.data());
   }
 
-  CheckReply(reply);
+  CheckReply(reply, "ReadHashFields");
 
   Status status = kOK;
   result.clear();
@@ -144,7 +144,7 @@ DB::Status RedisDB::ReadHashFields(const std::string &redis_key,
 DB::Status RedisDB::IndexKey(const std::string &table, Slice key) {
   const std::string index_key = BuildIndexKey(table);
   redisReply *reply = (redisReply *)redisCommand(context_, "ZADD %s 0 %b", index_key.c_str(), key.data(), key.size());
-  CheckReply(reply);
+  CheckReply(reply, "IndexKey");
   freeReplyObject(reply);
   return kOK;
 }
@@ -152,7 +152,7 @@ DB::Status RedisDB::IndexKey(const std::string &table, Slice key) {
 DB::Status RedisDB::DeindexKey(const std::string &table, Slice key) {
   const std::string index_key = BuildIndexKey(table);
   redisReply *reply = (redisReply *)redisCommand(context_, "ZREM %s %b", index_key.c_str(), key.data(), key.size());
-  CheckReply(reply);
+  CheckReply(reply, "DeindexKey");
   freeReplyObject(reply);
   return kOK;
 }
@@ -169,7 +169,7 @@ DB::Status RedisDB::Scan(const std::string &table, Slice key, int len,
 
   redisReply *reply = (redisReply *)redisCommand(
       context_, "ZRANGEBYLEX %s %s + LIMIT 0 %d", index_key.c_str(), start.c_str(), len);
-  CheckReply(reply);
+  CheckReply(reply, "Scan");
 
   if (reply->type != REDIS_REPLY_ARRAY) {
     freeReplyObject(reply);
@@ -193,7 +193,11 @@ DB::Status RedisDB::Scan(const std::string &table, Slice key, int len,
 
 DB::Status RedisDB::Update(const std::string &table, Slice key, const ReadonlyFields &values) {
   std::string redis_key = BuildRedisKey(table, key);
-  
+
+  if (values.empty()) {
+    return kError; // a failed update
+  }
+
   // Build HMSET command
   argv_.clear();
   argvlen_.clear();
@@ -211,11 +215,11 @@ DB::Status RedisDB::Update(const std::string &table, Slice key, const ReadonlyFi
     argv_.push_back(value.data());
     argvlen_.push_back(value.size());
   }
-  
+
   redisReply *reply = (redisReply *)redisCommandArgv(context_, argv_.size(), 
       argv_.data(), argvlen_.data());
   
-  CheckReply(reply);
+  CheckReply(reply, "Update");
   
   Status status = (reply->type == REDIS_REPLY_STATUS && 
                    strcmp(reply->str, "OK") == 0) ? kOK : kError;
@@ -236,7 +240,7 @@ DB::Status RedisDB::Delete(const std::string &table, Slice key) {
   std::string redis_key = BuildRedisKey(table, key);
   
   redisReply *reply = (redisReply *)redisCommand(context_, "DEL %s", redis_key.c_str());
-  CheckReply(reply);
+  CheckReply(reply, "Delete");
   
   Status status = (reply->type == REDIS_REPLY_INTEGER && reply->integer > 0) ? kOK : kNotFound;
   

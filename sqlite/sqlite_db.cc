@@ -336,6 +336,8 @@ DB::Status SqliteDB::Update(const std::string &table, Slice key, const ReadonlyF
       auto [name, value] = *it;
       fields.push_back(std::string(name.data(), name.size()));
     }
+    auto query = BuildUpdateQuery(table_name_, key_, fields);
+    std::cout << "Update query: " << query << std::endl; // Debugging line
     stmt = SQLite3Prepare(db_, BuildUpdateQuery(table_name_, key_, fields));
   }
 

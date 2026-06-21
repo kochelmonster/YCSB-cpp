@@ -46,7 +46,7 @@ class RedisDB : public DB {
   
   std::string BuildRedisKey(const std::string &table, Slice key);
   std::string BuildIndexKey(const std::string &table);
-  void CheckReply(redisReply *reply);
+  void CheckReply(redisReply *reply, const std::string &source);
   Status ReadHashFields(const std::string &redis_key,
                         const std::unordered_set<std::string> *fields,
                         Fields &result);

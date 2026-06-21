@@ -8,6 +8,9 @@ Charts produced:
   value_size_scaling.png           — line chart: throughput vs value size
   acid_workload_comparison.png     — ACID workloads, best across scenarios
   concurrent_workload_comparison.png — concurrent workloads, grouped bars
+
+All charts are normalized to a reference database (LevelDB if present,
+otherwise SQLite). Raw values are preserved in the accompanying CSV files.
 """
 
 from __future__ import annotations
@@ -56,6 +59,9 @@ COLORS = {
     "dragonfly": "#e74c3c",
 }
 
+# Reference databases for normalization, in order of preference
+REFERENCE_DB_PREFERENCE = ["lmdb", "sqlite"]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -102,13 +108,28 @@ def ordered_columns(columns: Iterable[str]) -> list[str]:
     return preferred + remaining
 
 
+def choose_reference_db(pivot: pd.DataFrame) -> str | None:
+    """Return the first available reference database from the preference list."""
+    for db in REFERENCE_DB_PREFERENCE:
+        if db in pivot.columns:
+            return db
+    return None
+
+
+def normalize_pivot(pivot: pd.DataFrame, reference_db: str) -> pd.DataFrame:
+    """Return a normalized copy of *pivot* where every value is divided by the
+    corresponding row's value in *reference_db*. The reference column is kept
+    and becomes exactly 1.0 for all rows."""
+    norm = pivot.div(pivot[reference_db], axis=0)
+    return norm
+
+
 def prepare_matrix(csv_path: Path) -> pd.DataFrame:
     frame = pd.read_csv(csv_path)
     if "scenario" not in frame.columns:
         frame["scenario"] = "baseline"
     if "batch_size" not in frame.columns:
         frame["batch_size"] = 1
-    frame["load_throughput_ops_sec"] = pd.to_numeric(frame["load_throughput_ops_sec"])
     frame["run_throughput_ops_sec"] = pd.to_numeric(frame["run_throughput_ops_sec"])
     frame["workload_label"] = frame["workload"].map(WORKLOAD_LABELS).fillna(frame["workload"])
     # Append " DW" suffix for dedicated_writer scenarios so they appear as separate bars
@@ -130,8 +151,24 @@ def save_grouped_bars(
     ylabel: str,
     *,
     sig_figs: int = 0,
+    log_scale: bool | None = None,
+    reference_db: str | None = None,
 ) -> None:
+    """Grouped bar chart, with optional logarithmic y-axis for extreme scale differences.
+
+    When *log_scale* is None (default), the function automatically detects if the
+    tallest bar exceeds 10× the median of all positive values and switches to a
+    logarithmic y-axis.
+
+    If *reference_db* is set, a dashed horizontal reference line is drawn at
+    y=1.0 and bar labels use ratio formatting (e.g. ``4.57×``).  The reference
+    column is expected to have already been dropped from *pivot*.
+    """
+    if log_scale is None:
+        log_scale = _has_extreme_scale(pivot)
+
     fig, ax = plt.subplots(figsize=(14, 9))
+    ax.ticklabel_format(style="plain", axis="y")
 
     x = np.arange(len(pivot.index))
     columns = ordered_columns(pivot.columns)
@@ -151,18 +188,44 @@ def save_grouped_bars(
         for bar, value in zip(bars, heights):
             if value <= 0:
                 continue
+            if reference_db is not None:
+                # Ratio formatting: "4.57×"
+                label_text = f"{value:.2f}×"
+                # Position label above bar: in log scale, offset is multiplicative
+                if log_scale:
+                    y_offset = max(value, 0.001) * 1.15
+                else:
+                    y_offset = value + max(pivot.max()) * 0.04
+            else:
+                if log_scale:
+                    y_offset = value * 1.08
+                else:
+                    y_offset = value + max(pivot.max()) * 0.01
+                label_text = f"{value/1000:.{sig_figs}g}k" if sig_figs > 0 else f"{value/1000:.0f}k"
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
-                value + max(pivot.max()) * 0.01,
-                f"{value/1000:.{sig_figs}g}k" if sig_figs > 0 else f"{value/1000:.0f}k",
+                y_offset,
+                label_text,
                 ha="center",
                 va="bottom",
                 fontsize=8,
                 rotation=90,
             )
 
-    # Add 20% headroom above the tallest bar so rotated labels aren't clipped.
-    ax.set_ylim(top=ax.get_ylim()[1] * 1.20)
+    # Reference line at y=1 for normalized charts
+    if reference_db is not None:
+        ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.6)
+
+    if log_scale:
+        # Ensure positive lower limit for log scale
+        ax.set_yscale("log")
+        # Add 40% headroom in log space so labels aren't clipped
+        ymin, ymax = ax.get_ylim()
+        ax.set_ylim(ymin, ymax * 1.40)
+    else:
+        # Add 20% headroom above the tallest bar so rotated labels aren't clipped.
+        ax.set_ylim(top=ax.get_ylim()[1] * 1.20)
+
     ax.set_title(title, fontsize=15, fontweight="bold")
     ax.set_ylabel(ylabel)
     ax.set_xticks(x)
@@ -182,9 +245,16 @@ def save_line_chart(
     xlabel: str,
     *,
     log_scale: bool = False,
+    reference_db: str | None = None,
 ) -> None:
-    """Line chart from a pivot with x-axis = index, one line per column (database)."""
+    """Line chart from a pivot with x-axis = index, one line per column (database).
+
+    If *reference_db* is set, a dashed horizontal reference line is drawn at
+    y=1.0.  The reference column is expected to have already been dropped from
+    *pivot*.
+    """
     fig, ax = plt.subplots(figsize=(10, 7))
+    ax.ticklabel_format(style="plain", axis="y")
 
     columns = ordered_columns(pivot.columns)
     x = np.arange(len(pivot.index))
@@ -196,6 +266,10 @@ def save_line_chart(
             x, values, marker=marker, label=db,
             color=COLORS.get(db, None), linewidth=2, markersize=8,
         )
+
+    # Reference line at y=1 for normalized charts
+    if reference_db is not None:
+        ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.6)
 
     ax.set_title(title, fontsize=15, fontweight="bold")
     ax.set_ylabel(ylabel)
@@ -209,6 +283,17 @@ def save_line_chart(
     plt.tight_layout()
     plt.savefig(output_path, dpi=220, bbox_inches="tight")
     plt.close(fig)
+
+
+def _has_extreme_scale(pivot: pd.DataFrame) -> bool:
+    """Return True if the tallest bar is >10× the median of positives (needs log scale)."""
+    vals = pivot.to_numpy().flatten()
+    vals = vals[vals > 0]
+    if len(vals) < 2:
+        return False
+    med = np.median(vals)
+    mx = vals.max()
+    return mx > 10 * med if med > 0 else False
 
 
 def main() -> None:
@@ -239,12 +324,15 @@ def main() -> None:
             aggfunc="max",
             fill_value=0,
         )
+        ref_db = choose_reference_db(base_run_pivot)
         comparison_chart = output_dir / "workload_comparison.png"
         save_grouped_bars(
-            base_run_pivot,
+            normalize_pivot(base_run_pivot, ref_db) if ref_db else base_run_pivot,
             comparison_chart,
             "Workload Performance (Baseline — Default Settings)",
-            "Run throughput (ops/sec)",
+            f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
+            log_scale=False,
+            reference_db=ref_db,
         )
         save_pivot_csv(base_run_pivot, comparison_chart)
         generated_files.append(comparison_chart)
@@ -270,14 +358,16 @@ def main() -> None:
             )
             # Sort by batch size ascending
             batch_pivot = batch_pivot.sort_index()
+            ref_db = choose_reference_db(batch_pivot)
             chart_name = f"batch_{op_type}_scaling.png"
             chart_path = output_dir / chart_name
             save_line_chart(
-                batch_pivot,
+                normalize_pivot(batch_pivot, ref_db) if ref_db else batch_pivot,
                 chart_path,
                 f"Batch {op_label} Scaling — Throughput vs Batch Size",
-                "Run throughput (ops/sec)",
+                f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
                 "Batch size",
+                reference_db=ref_db,
             )
             save_pivot_csv(batch_pivot, chart_path)
             generated_files.append(chart_path)
@@ -298,14 +388,16 @@ def main() -> None:
         value_pivot = value_pivot.sort_index()
         # Rename index to human-readable labels
         value_pivot.index = [f"{s}B" for s in value_pivot.index]
+        ref_db = choose_reference_db(value_pivot)
         value_chart = output_dir / "value_size_scaling.png"
         save_line_chart(
-            value_pivot,
+            normalize_pivot(value_pivot, ref_db) if ref_db else value_pivot,
             value_chart,
             "Value Size Scaling — Throughput vs Payload Size",
-            "Run throughput (ops/sec)",
+            f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
             "Value size (fieldlength × fieldcount)",
-            log_scale=True,
+            log_scale=False,
+            reference_db=ref_db,
         )
         save_pivot_csv(value_pivot, value_chart)
         generated_files.append(value_chart)
@@ -317,13 +409,15 @@ def main() -> None:
     if not acid_df.empty:
         acid_run_pivot = acid_df.groupby(["workload_label", "database"])["run_throughput_ops_sec"].max().unstack(fill_value=0)
         acid_run_pivot = acid_run_pivot.loc[:, (acid_run_pivot > 0).any()]
+        ref_db = choose_reference_db(acid_run_pivot)
         acid_chart = output_dir / "acid_workload_comparison.png"
         save_grouped_bars(
-            acid_run_pivot,
+            normalize_pivot(acid_run_pivot, ref_db) if ref_db else acid_run_pivot,
             acid_chart,
             "ACID Workload Performance (Best Across All Scenarios)",
-            "Run throughput (ops/sec)",
+            f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
             sig_figs=3,
+            reference_db=ref_db,
         )
         save_pivot_csv(acid_run_pivot, acid_chart)
         generated_files.append(acid_chart)
@@ -335,12 +429,14 @@ def main() -> None:
     if not concurrent_df.empty:
         concurrent_run_pivot = concurrent_df.groupby(["workload_label", "database"])["run_throughput_ops_sec"].max().unstack(fill_value=0)
         concurrent_run_pivot = concurrent_run_pivot.loc[:, (concurrent_run_pivot > 0).any()]
+        ref_db = choose_reference_db(concurrent_run_pivot)
         concurrent_chart = output_dir / "concurrent_workload_comparison.png"
         save_grouped_bars(
-            concurrent_run_pivot,
+            normalize_pivot(concurrent_run_pivot, ref_db) if ref_db else concurrent_run_pivot,
             concurrent_chart,
             "Concurrent Workload Performance (8 threads)",
-            "Run throughput (ops/sec)",
+            f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
+            reference_db=ref_db,
         )
         save_pivot_csv(concurrent_run_pivot, concurrent_chart)
         generated_files.append(concurrent_chart)

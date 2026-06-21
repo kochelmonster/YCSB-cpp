@@ -67,6 +67,7 @@ void LeavesDB::Init() {
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
 
   sync_ = props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true";
+  wal_enabled_ = props.GetProperty(PROP_WAL, PROP_WAL_DEFAULT) == "true";
   batch_size_ =
       std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
   if (batch_size_ < 1) batch_size_ = 1;

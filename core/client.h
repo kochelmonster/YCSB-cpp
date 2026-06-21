@@ -58,7 +58,7 @@ inline int ClientThread(ycsbc::DB* db, CoreWorkload* wl, const int num_ops,
         case CoreWorkload::WorkItem::OpType::READMODIFYWRITE:
           result_buf.clear();
           db->Read(table, item.key, nullptr, result_buf);
-          db->Update(table, item.key, values);
+          db->Update(table, item.key, result_buf);
           break;
       }
       ops++;
