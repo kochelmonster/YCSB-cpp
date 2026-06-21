@@ -107,7 +107,7 @@ class LeavesDB : public DB {
       if (format_ == kConfluence) {
         confluence_cursor_.start_transaction();
       } else {
-        cursor_.start_transaction(wal_enabled_);
+        cursor_.start_transaction(false, wal_enabled_);
       }
     }
   }

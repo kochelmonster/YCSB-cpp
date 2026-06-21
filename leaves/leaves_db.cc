@@ -177,7 +177,7 @@ DB::Status LeavesDB::BeginTransaction() {
   if (format_ == kConfluence) {
     confluence_cursor_.start_transaction();
   } else {
-    cursor_.start_transaction(wal_enabled_);
+    cursor_.start_transaction(false, wal_enabled_);
   }
   pending_ = 0;
   txn_active_ = true;
