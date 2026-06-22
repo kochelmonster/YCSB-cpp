@@ -10,6 +10,7 @@
 #define YCSB_C_BASIC_DB_H_
 
 #include "db.h"
+#include "core/dataset.h"
 #include "utils/properties.h"
 
 #include <iostream>
@@ -35,6 +36,8 @@ class BasicDB : public DB {
   Status Insert(const std::string &table, Slice key, const ReadonlyFields &values);
 
   Status Delete(const std::string &table, Slice key);
+
+  Status Load(const std::string &table, Dataset &batch) override;
 
  private:
   static std::mutex mutex_;

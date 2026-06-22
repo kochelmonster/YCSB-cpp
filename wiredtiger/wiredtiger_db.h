@@ -7,6 +7,7 @@
 #include <string>
 #include <mutex>
 
+#include "core/dataset.h"
 #include "core/db.h"
 #include "utils/properties.h"
 
@@ -53,6 +54,8 @@ class WTDB : public DB {
   Status Delete(const std::string &table, Slice key) {
     return (this->*(method_delete_))(table, key);
   }
+
+  Status Load(const std::string &table, Dataset &batch);
 
  private:
 

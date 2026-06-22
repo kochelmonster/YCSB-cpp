@@ -11,6 +11,7 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "core/dataset.h"
 #include "core/db.h"
 
 #include <sqlite3.h>
@@ -38,11 +39,12 @@ class SqliteDB : public DB {
 
   Status Delete(const std::string &table, Slice key) override;
 
+  Status Load(const std::string &table, Dataset &batch) override;
+
   Status BeginTransaction() override;
   Status CommitTransaction() override;
   Status RollbackTransaction() override;
-
-  bool SupportsMultiThreadWrite() const override { return false; }
+  void FlushPending() override;
 
  private:
   void OpenDB();

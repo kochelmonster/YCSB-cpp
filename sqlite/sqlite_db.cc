@@ -164,6 +164,11 @@ void SqliteDB::PrepareQueries() {
   stmt_delete_ = SQLite3Prepare(db_, BuildDeleteQuery(table_name_, key_));
 }
 
+void SqliteDB::FlushPending() {
+  // No-op: SQLite handles cleanup on connection close.
+  // Transactions are explicitly managed by BeginTransaction/CommitTransaction.
+}
+
 DB::Status SqliteDB::BeginTransaction() {
   int rc = sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
   return rc == SQLITE_OK ? kOK : kError;
@@ -201,6 +206,46 @@ void SqliteDB::Cleanup() {
     int rc = sqlite3_close(db_);
     assert(rc == SQLITE_OK);
   }
+}
+
+DB::Status SqliteDB::Load(const std::string &table, Dataset &batch) {
+  // BEGIN transaction for bulk load
+  int rc = sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
+  if (rc != SQLITE_OK) return kError;
+
+  int rc2 = SQLITE_OK;
+  int n = batch.OpCount();
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    Fields new_values;
+    new_values = const_cast<ReadonlyFields&>(item.values);
+
+    rc = sqlite3_bind_text(stmt_insert_, 1, item.key.data(), item.key.size(), SQLITE_STATIC);
+    if (rc != SQLITE_OK) { rc2 = rc; break; }
+
+    size_t j = 0;
+    for (auto it = new_values.begin(); it != new_values.end(); ++it, ++j) {
+      auto [name, value] = *it;
+      rc = sqlite3_bind_text(stmt_insert_, 2 + j, value.data(), value.size(), SQLITE_STATIC);
+      if (rc != SQLITE_OK) { rc2 = rc; break; }
+    }
+    if (rc2 != SQLITE_OK) break;
+
+    rc = sqlite3_step(stmt_insert_);
+    if (rc != SQLITE_DONE) { rc2 = rc; break; }
+    sqlite3_reset(stmt_insert_);
+    sqlite3_clear_bindings(stmt_insert_);
+  }
+
+  if (rc2 != SQLITE_OK) {
+    sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+    sqlite3_reset(stmt_insert_);
+    sqlite3_clear_bindings(stmt_insert_);
+    return kError;
+  }
+
+  rc = sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr);
+  return rc == SQLITE_OK ? kOK : kError;
 }
 
 DB::Status SqliteDB::Read(const std::string &table, Slice key,

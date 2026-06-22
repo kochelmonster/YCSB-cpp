@@ -50,9 +50,6 @@ namespace {
 
   const std::string PROP_BLOCK_RESTART_INTERVAL = "leveldb.block_restart_interval";
   const std::string PROP_BLOCK_RESTART_INTERVAL_DEFAULT = "0";
-
-  const std::string PROP_BATCH_SIZE = "leveldb.batch_size";
-  const std::string PROP_BATCH_SIZE_DEFAULT = "1";
 } // anonymous
 
 namespace ycsbc {
@@ -91,14 +88,12 @@ void LeveldbDB::Init() {
     throw utils::Exception("unknown format");
   }
   fieldcount_ = std::stoi(props.GetProperty(CoreWorkload::FIELD_COUNT_PROPERTY,
-                                            CoreWorkload::FIELD_COUNT_DEFAULT));
+                                             CoreWorkload::FIELD_COUNT_DEFAULT));
   field_prefix_ = props.GetProperty(CoreWorkload::FIELD_NAME_PREFIX,
                                       CoreWorkload::FIELD_NAME_PREFIX_DEFAULT);
 
   sync_ = props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true";
-  batch_size_ = std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
-  if (batch_size_ < 1) batch_size_ = 1;
-  pending_ = 0;
+  txn_active_ = false;
   write_batch_.Clear();
 
   ref_cnt_++;
@@ -131,11 +126,36 @@ void LeveldbDB::Init() {
 
 void LeveldbDB::Cleanup() {
   const std::lock_guard<std::mutex> lock(mu_);
-  FlushBatch();
+  FlushWriteBatch();
   if (--ref_cnt_) {
     return;
   }
   delete db_;
+}
+
+DB::Status LeveldbDB::BeginTransaction() {
+  write_batch_.Clear();
+  txn_active_ = true;
+  return kOK;
+}
+
+DB::Status LeveldbDB::CommitTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  FlushWriteBatch();
+  return kOK;
+}
+
+DB::Status LeveldbDB::RollbackTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  write_batch_.Clear();
+  return kOK;
+}
+
+void LeveldbDB::FlushPending() {
+  // Called at thread exit; commit any writes accumulated in the batch.
+  FlushWriteBatch();
 }
 
 void LeveldbDB::GetOptions(const utils::Properties &props, leveldb::Options *opt) {
@@ -177,7 +197,7 @@ void LeveldbDB::GetOptions(const utils::Properties &props, leveldb::Options *opt
     opt->block_size = block_size;
   }
   int block_restart_interval = std::stoi(props.GetProperty(PROP_BLOCK_RESTART_INTERVAL,
-                                                PROP_BLOCK_RESTART_INTERVAL_DEFAULT));
+                                                 PROP_BLOCK_RESTART_INTERVAL_DEFAULT));
   if (block_restart_interval > 0) {
     opt->block_restart_interval = block_restart_interval;
   }
@@ -211,7 +231,7 @@ std::string LeveldbDB::FieldFromCompKey(const std::string &comp_key) {
 DB::Status LeveldbDB::ReadSingleEntry(const std::string &table, Slice key,
                                       const std::unordered_set<std::string> *fields,
                                       Fields &result) {
-  FlushBatch();
+  // Read directly from the DB (LevelDB WriteBatch does not support reads).
   std::string data;
   leveldb::Status s = db_->Get(leveldb::ReadOptions(), leveldb::Slice(key.data(), key.size()), &data);
   if (s.IsNotFound()) {
@@ -231,7 +251,6 @@ DB::Status LeveldbDB::ReadSingleEntry(const std::string &table, Slice key,
 DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, Slice key, int len,
                                       const std::unordered_set<std::string> *fields,
                                       std::vector<Fields> &result) {
-  FlushBatch();
   leveldb::Iterator *db_iter = db_->NewIterator(leveldb::ReadOptions());
   db_iter->Seek(leveldb::Slice(key.data(), key.size()));
   for (int i = 0; db_iter->Valid() && i < len; i++) {
@@ -252,7 +271,7 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, Slice key, int l
 
 DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, Slice key,
                                         const ReadonlyFields &values) {
-  FlushBatch();
+  // Read current value from DB
   std::string data;
   leveldb::Status s = db_->Get(leveldb::ReadOptions(), leveldb::Slice(key.data(), key.size()), &data);
   if (s.IsNotFound()) {
@@ -260,12 +279,11 @@ DB::Status LeveldbDB::UpdateSingleEntry(const std::string &table, Slice key,
   } else if (!s.ok()) {
     throw utils::Exception(std::string("LevelDB Get: ") + s.ToString());
   }
-    ReadonlyFields readonly(data.data(), data.size());
+  ReadonlyFields readonly(data.data(), data.size());
   updated_fields_ = readonly;
   updated_fields_.update(values);
   const auto& buffer = updated_fields_.buffer();
   write_batch_.Put(leveldb::Slice(key.data(), key.size()), leveldb::Slice(buffer.data(), buffer.size()));
-  CommitMutation();
   return kOK;
 }
 
@@ -273,13 +291,11 @@ DB::Status LeveldbDB::InsertSingleEntry(const std::string &table, Slice key,
                                         const ReadonlyFields &values) {
   const auto& data = values.data();
   write_batch_.Put(leveldb::Slice(key.data(), key.size()), leveldb::Slice(data.data(), data.size()));
-  CommitMutation();
   return kOK;
 }
 
 DB::Status LeveldbDB::DeleteSingleEntry(const std::string &table, Slice key) {
   write_batch_.Delete(leveldb::Slice(key.data(), key.size()));
-  CommitMutation();
   return kOK;
 }
 
@@ -379,38 +395,39 @@ DB::Status LeveldbDB::ScanCompKeyCM(const std::string &table, Slice key, int len
 
 DB::Status LeveldbDB::InsertCompKey(const std::string &table, Slice key,
                                     const ReadonlyFields &values) {
-  leveldb::WriteOptions wopt;
-  wopt.sync = sync_;
-  leveldb::WriteBatch batch;
-
   std::string comp_key;
   for (auto it = values.begin(); it != values.end(); ++it) {
     auto [name, value] = *it;
     comp_key = BuildCompKey(key.ToString(), std::string(name.data(), name.size()));
-    batch.Put(comp_key, leveldb::Slice(value.data(), value.size()));
-  }
-
-  leveldb::Status s = db_->Write(wopt, &batch);
-  if (!s.ok()) {
-    throw utils::Exception(std::string("LevelDB Write: ") + s.ToString());
+    write_batch_.Put(comp_key, leveldb::Slice(value.data(), value.size()));
   }
   return kOK;
 }
 
 DB::Status LeveldbDB::DeleteCompKey(const std::string &table, Slice key) {
-  leveldb::WriteOptions wopt;
-  wopt.sync = sync_;
-  leveldb::WriteBatch batch;
-
   std::string comp_key;
   for (int i = 0; i < fieldcount_; i++) {
     comp_key = BuildCompKey(key.ToString(), field_prefix_ + std::to_string(i));
-    batch.Delete(comp_key);
+    write_batch_.Delete(comp_key);
   }
+  return kOK;
+}
 
-  leveldb::Status s = db_->Write(wopt, &batch);
+DB::Status LeveldbDB::Load(const std::string &table, Dataset &batch) {
+  // Use a single WriteBatch for efficient bulk loading.
+  leveldb::WriteOptions wopt;
+  wopt.sync = sync_;
+  leveldb::WriteBatch wb;
+  int n = batch.OpCount();
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    const auto &data = item.values.data();
+    wb.Put(leveldb::Slice(item.key.data(), item.key.size()),
+           leveldb::Slice(data.data(), data.size()));
+  }
+  leveldb::Status s = db_->Write(wopt, &wb);
   if (!s.ok()) {
-    throw utils::Exception(std::string("LevelDB Write: ") + s.ToString());
+    throw utils::Exception(std::string("LevelDB Load: ") + s.ToString());
   }
   return kOK;
 }

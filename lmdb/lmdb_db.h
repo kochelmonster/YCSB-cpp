@@ -14,6 +14,7 @@
 #include <cstring>
 #include <endian.h>
 
+#include "core/dataset.h"
 #include "core/db.h"
 #include "utils/utils.h"
 
@@ -23,12 +24,14 @@ namespace ycsbc {
 
 class LmdbDB : public DB {
  public:
-  LmdbDB() : batch_size_(1), pending_(0), write_txn_(nullptr), txn_active_(false) {}
+  LmdbDB() : write_txn_(nullptr), txn_active_(false) {}
   ~LmdbDB() {}
 
   void Init();
 
   void Cleanup();
+
+  void FlushPending() override;
 
   Status Read(const std::string &table, Slice key,
               const std::unordered_set<std::string> *fields, Fields &result);
@@ -42,32 +45,16 @@ class LmdbDB : public DB {
 
   Status Delete(const std::string &table, Slice key);
 
-  bool SupportsMultiThreadWrite() const override { return false; }
+  Status BeginTransaction() override;
+  Status CommitTransaction() override;
+  Status RollbackTransaction() override;
 
-  Status BeginTransaction();
-  Status CommitTransaction();
-  Status RollbackTransaction();
+  Status Load(const std::string &table, Dataset &batch) override;
 
  private:
-  int batch_size_;
-  int pending_;
   Fields current_values_;
   MDB_txn *write_txn_;
   bool txn_active_;
-
-  void FlushBatch() {
-    if (txn_active_) return;
-    if (pending_ > 0 && write_txn_ != nullptr) {
-      int ret = mdb_txn_commit(write_txn_);
-      write_txn_ = nullptr;
-      pending_ = 0;
-      if (ret) throw utils::Exception(std::string("mdb_txn_commit: ") + mdb_strerror(ret));
-    }
-  }
-  void CommitMutation() {
-    if (txn_active_) return;
-    if (++pending_ >= batch_size_) FlushBatch();
-  }
 
   static size_t field_count_;
   static std::string field_prefix_;
@@ -83,4 +70,3 @@ DB *NewLmdbDB();
 } // ycsbc
 
 #endif // YCSB_C_LMDB_DB_H_
-

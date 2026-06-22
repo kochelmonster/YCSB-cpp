@@ -14,6 +14,7 @@
 #include <cstring>
 #include <endian.h>
 
+#include "core/dataset.h"
 #include "core/db.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
@@ -26,12 +27,17 @@ namespace ycsbc {
 
 class RocksdbDB : public DB {
  public:
-  RocksdbDB() : batch_size_(1), pending_(0) {}
+  RocksdbDB() : txn_active_(false) {}
   ~RocksdbDB() {}
 
   void Init();
 
   void Cleanup();
+
+  Status BeginTransaction() override;
+  Status CommitTransaction() override;
+  Status RollbackTransaction() override;
+  void FlushPending() override;
 
   Status Read(const std::string &table, Slice key,
                const std::unordered_set<std::string> *fields, Fields &result) override {
@@ -54,6 +60,8 @@ class RocksdbDB : public DB {
   Status Delete(const std::string &table, Slice key) override {
     return (this->*(method_delete_))(table, key);
   }
+
+  Status Load(const std::string &table, Dataset &batch) override;
 
  private:
   enum RocksFormat {
@@ -91,20 +99,15 @@ class RocksdbDB : public DB {
 
   int fieldcount_;
 
-  int batch_size_;
-  int pending_;
+  bool txn_active_;
   rocksdb::WriteBatch write_batch_;
 
-  void FlushBatch() {
-    if (pending_ > 0) {
+  void FlushWriteBatch() {
+    if (write_batch_.Count() > 0) {
       rocksdb::Status s = db_->Write(wopt_, &write_batch_);
       if (!s.ok()) throw utils::Exception(std::string("RocksDB Write: ") + s.ToString());
       write_batch_.Clear();
-      pending_ = 0;
     }
-  }
-  void CommitMutation() {
-    if (++pending_ >= batch_size_) FlushBatch();
   }
 
   static std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
@@ -119,4 +122,3 @@ DB *NewRocksdbDB();
 } // ycsbc
 
 #endif // YCSB_C_ROCKSDB_DB_H_
-

@@ -435,6 +435,23 @@ DB::Status WTDB::DeleteSingleEntry(const std::string& table, Slice key) {
   return kOK;
 }
 
+DB::Status WTDB::Load(const std::string &table, Dataset &batch) {
+  int n = batch.OpCount();
+  WT_ITEM k, v;
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    const auto &data = item.values.data();
+    k.data = item.key.data();
+    k.size = item.key.size();
+    v.data = data.data();
+    v.size = data.size();
+    cursor_->set_key(cursor_, &k);
+    cursor_->set_value(cursor_, &v);
+    error_check(cursor_->insert(cursor_));
+  }
+  return kOK;
+}
+
 DB* NewWTDB() { return new WTDB; }
 
 const bool registered = DBFactory::RegisterDB("wiredtiger", NewWTDB);

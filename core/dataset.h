@@ -1,4 +1,3 @@
-
 #ifndef YCSB_C_DATASET_H_
 #define YCSB_C_DATASET_H_
 
@@ -32,6 +31,7 @@ class Dataset {
   std::string GetFullPath(int op_count) const;
   void DEBUG(int op_count);
 
+  int OpCount() const { return op_count_; }
   const CoreWorkload::WorkItem &Next();
 
  private:
@@ -43,6 +43,7 @@ class Dataset {
   std::string path_;
   std::string workload_props_hash_;
   bool force_generate_;
+  int op_count_;
 
   int fd_;
   void *map_;

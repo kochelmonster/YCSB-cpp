@@ -34,6 +34,7 @@ void RedisDB::Init() {
   port_ = std::stoi(props_->GetProperty(PROP_PORT, PROP_PORT_DEFAULT));
   timeout_ms_ = std::stoi(props_->GetProperty(PROP_TIMEOUT, PROP_TIMEOUT_DEFAULT));
   destroy_ = props_->GetProperty(PROP_DESTROY, PROP_DESTROY_DEFAULT) == "true";
+  txn_active_ = false;
 
   struct timeval timeout = { timeout_ms_ / 1000, (timeout_ms_ % 1000) * 1000 };
   context_ = redisConnectWithTimeout(host_.c_str(), port_, timeout);
@@ -60,6 +61,43 @@ void RedisDB::Cleanup() {
   if (context_) {
     redisFree(context_);
     context_ = nullptr;
+  }
+}
+
+DB::Status RedisDB::BeginTransaction() {
+  if (txn_active_) return kError;
+  // Start MULTI transaction
+  redisReply *reply = (redisReply *)redisCommand(context_, "MULTI");
+  CheckReply(reply, "BeginTransaction");
+  freeReplyObject(reply);
+  txn_active_ = true;
+  return kOK;
+}
+
+DB::Status RedisDB::CommitTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  redisReply *reply = (redisReply *)redisCommand(context_, "EXEC");
+  CheckReply(reply, "CommitTransaction");
+  freeReplyObject(reply);
+  return kOK;
+}
+
+DB::Status RedisDB::RollbackTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  redisReply *reply = (redisReply *)redisCommand(context_, "DISCARD");
+  CheckReply(reply, "RollbackTransaction");
+  freeReplyObject(reply);
+  return kOK;
+}
+
+void RedisDB::FlushPending() {
+  // Called at thread exit. If a transaction is still active, commit it.
+  if (txn_active_) {
+    txn_active_ = false;
+    redisReply *reply = (redisReply *)redisCommand(context_, "EXEC");
+    if (reply) freeReplyObject(reply);
   }
 }
 
@@ -157,6 +195,24 @@ DB::Status RedisDB::DeindexKey(const std::string &table, Slice key) {
   return kOK;
 }
 
+DB::Status RedisDB::Load(const std::string &table, Dataset &batch) {
+  // Start MULTI for pipelined bulk insert
+  redisReply *reply = (redisReply *)redisCommand(context_, "MULTI");
+  CheckReply(reply, "Load");
+  freeReplyObject(reply);
+
+  int n = batch.OpCount();
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    Update(table, item.key, item.values);
+  }
+
+  reply = (redisReply *)redisCommand(context_, "EXEC");
+  CheckReply(reply, "Load");
+  freeReplyObject(reply);
+  return kOK;
+}
+
 DB::Status RedisDB::Read(const std::string &table, Slice key,
                          const std::unordered_set<std::string> *fields, Fields &result) {
   return ReadHashFields(BuildRedisKey(table, key), fields, result);
@@ -195,7 +251,7 @@ DB::Status RedisDB::Update(const std::string &table, Slice key, const ReadonlyFi
   std::string redis_key = BuildRedisKey(table, key);
 
   if (values.empty()) {
-    return kError; // a failed update
+    return kError;
   }
 
   // Build HMSET command

@@ -21,6 +21,8 @@ Dataset::Dataset(const utils::Properties& props, CoreWorkload& workload,
       thread_id_(thread_id),
       is_loading_(is_loading),
       workload_props_hash_(workload.GetPropertiesHash()),
+      force_generate_(false),
+      op_count_(0),
       fd_(-1),
       map_(nullptr),
       size_(0),
@@ -40,6 +42,7 @@ Dataset::~Dataset() {
 }
 
 void Dataset::Open(int op_count) {
+  op_count_ = op_count;
   fd_ = open(GetFullPath(op_count).c_str(), O_RDONLY);
   if (fd_ == -1) {
     throw utils::Exception("Failed to open dataset file");

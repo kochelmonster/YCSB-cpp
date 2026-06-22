@@ -15,6 +15,7 @@
 #include <cstring>
 #include <endian.h>
 
+#include "core/dataset.h"
 #include "core/db.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
@@ -30,12 +31,19 @@ namespace ycsbc {
 
 class LeveldbDB : public DB {
  public:
-  LeveldbDB() : sync_(false), batch_size_(1), pending_(0) {}
+  LeveldbDB() : sync_(false), txn_active_(false) {}
   ~LeveldbDB() {}
 
   void Init();
 
   void Cleanup();
+
+  Status BeginTransaction() override;
+  Status CommitTransaction() override;
+  Status RollbackTransaction() override;
+  void FlushPending() override;
+
+  Status Load(const std::string &table, Dataset &batch) override;
 
   Status Read(const std::string &table, Slice key,
                const std::unordered_set<std::string> *fields, Fields &result) override {
@@ -113,22 +121,15 @@ class LeveldbDB : public DB {
   std::string field_prefix_;
 
   bool sync_;
-  int batch_size_;
-  int pending_;
+  bool txn_active_;
   leveldb::WriteBatch write_batch_;
 
-  void FlushBatch() {
-    if (pending_ > 0) {
-      leveldb::WriteOptions wopt;
-      wopt.sync = sync_;
-      leveldb::Status s = db_->Write(wopt, &write_batch_);
-      if (!s.ok()) throw utils::Exception(std::string("LevelDB Write: ") + s.ToString());
-      write_batch_.Clear();
-      pending_ = 0;
-    }
-  }
-  void CommitMutation() {
-    if (++pending_ >= batch_size_) FlushBatch();
+  void FlushWriteBatch() {
+    leveldb::WriteOptions wopt;
+    wopt.sync = sync_;
+    leveldb::Status s = db_->Write(wopt, &write_batch_);
+    if (!s.ok()) throw utils::Exception(std::string("LevelDB Write: ") + s.ToString());
+    write_batch_.Clear();
   }
 
   static leveldb::DB *db_;
@@ -141,4 +142,3 @@ DB *NewLeveldbDB();
 } // ycsbc
 
 #endif // YCSB_C_LEVELDB_DB_H_
-

@@ -33,9 +33,6 @@ const std::string PROP_DESTROY_DEFAULT = "false";
 const std::string PROP_SYNC = "leaves.sync";
 const std::string PROP_SYNC_DEFAULT = "false";
 
-const std::string PROP_BATCH_SIZE = "leaves.batch_size";
-const std::string PROP_BATCH_SIZE_DEFAULT = "1";
-
 const std::string PROP_MERGE_THRESHOLD = "leaves.merge_threshold";
 const std::string PROP_MERGE_THRESHOLD_DEFAULT = "0";  // 0 = leave default
 
@@ -51,11 +48,6 @@ std::shared_ptr<leaves::MapConfluenceDB> LeavesDB::confluence_db_(nullptr);
 int LeavesDB::ref_cnt_(0);
 std::mutex LeavesDB::mu_;
 
-bool LeavesDB::SupportsMultiThreadWrite() const {
-  if (props_ == nullptr) return false;
-  return props_->GetProperty(PROP_FORMAT, PROP_FORMAT_DEFAULT) == "confluence";
-}
-
 void LeavesDB::Init() {
   const std::lock_guard<std::mutex> lock(mu_);
 
@@ -68,10 +60,7 @@ void LeavesDB::Init() {
 
   sync_ = props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true";
   wal_enabled_ = props.GetProperty(PROP_WAL, PROP_WAL_DEFAULT) == "true";
-  batch_size_ =
-      std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
-  if (batch_size_ < 1) batch_size_ = 1;
-  pending_ = 0;
+  txn_active_ = false;
 
   format_ = kSingleRow;
   const std::string& format =
@@ -129,18 +118,27 @@ void LeavesDB::Init() {
 }
 
 void LeavesDB::FlushPending() {
-  if (txn_active_) return;
-  // Commit if there are pending writes OR if a transaction is open.
-  bool has_open_txn = (format_ == kConfluence)
-                          ? confluence_cursor_.is_transaction_active()
-                          : cursor_.is_transaction_active();
-  if (pending_ > 0 || has_open_txn) {
+  // Called at thread exit. Commit any active transaction or accumulated writes.
+  if (txn_active_) {
     if (format_ == kConfluence) {
       confluence_cursor_.commit(sync_);
     } else {
       cursor_.commit(sync_);
     }
-    pending_ = 0;
+    txn_active_ = false;
+    return;
+  }
+
+  // Even if no explicit transaction, commit any open cursor state.
+  bool has_open_txn = (format_ == kConfluence)
+                          ? confluence_cursor_.is_transaction_active()
+                          : cursor_.is_transaction_active();
+  if (has_open_txn) {
+    if (format_ == kConfluence) {
+      confluence_cursor_.commit(sync_);
+    } else {
+      cursor_.commit(sync_);
+    }
   }
 }
 
@@ -173,13 +171,13 @@ void LeavesDB::Cleanup() {
 
 DB::Status LeavesDB::BeginTransaction() {
   if (txn_active_) return kError;
+  // Flush any pending cursor state before starting a new transaction.
   FlushPending();
   if (format_ == kConfluence) {
     confluence_cursor_.start_transaction();
   } else {
     cursor_.start_transaction(false, wal_enabled_);
   }
-  pending_ = 0;
   txn_active_ = true;
   return kOK;
 }
@@ -192,7 +190,6 @@ DB::Status LeavesDB::CommitTransaction() {
   } else {
     cursor_.commit(sync_);
   }
-  pending_ = 0;
   return kOK;
 }
 
@@ -204,7 +201,6 @@ DB::Status LeavesDB::RollbackTransaction() {
   } else {
     cursor_.rollback();
   }
-  pending_ = 0;
   return kOK;
 }
 
@@ -212,13 +208,6 @@ DB::Status LeavesDB::Read(const std::string& /*table*/, Slice key,
                           const std::unordered_set<std::string>* fields,
                           Fields& result) {
   try {
-    // kSingleRow: the write-transaction cursor already sees all committed data;
-    // cursor_.update() below handles any stale snapshot after a batch commit.
-    // kConfluence: flush to ensure consistent reads in the multi-threaded
-    // model.
-    if (format_ == kConfluence) {
-      FlushPending();
-    }
     leaves::Slice key_slice(key.data(), key.size());
 
     leaves::Slice value_slice;
@@ -261,9 +250,6 @@ DB::Status LeavesDB::Scan(const std::string& /*table*/, Slice key, int len,
                           const std::unordered_set<std::string>* fields,
                           std::vector<Fields>& result) {
   try {
-    if (format_ == kConfluence) {
-      FlushPending();
-    }
     leaves::Slice key_slice(key.data(), key.size());
 
     if (format_ == kConfluence) {
@@ -311,7 +297,6 @@ DB::Status LeavesDB::Scan(const std::string& /*table*/, Slice key, int len,
 DB::Status LeavesDB::Update(const std::string& /*table*/, Slice key,
                             const ReadonlyFields& values) {
   try {
-    EnsureMutationReady();
     leaves::Slice key_slice(key.data(), key.size());
     if (format_ == kConfluence) {
       confluence_cursor_.find(key_slice);
@@ -340,7 +325,6 @@ DB::Status LeavesDB::Update(const std::string& /*table*/, Slice key,
       cursor_.value(value_slice);
     }
 
-    CommitMutation();
     return kOK;
   } catch (const std::exception& e) {
     std::cerr << "Leaves Update error: " << e.what() << std::endl;
@@ -351,7 +335,6 @@ DB::Status LeavesDB::Update(const std::string& /*table*/, Slice key,
 DB::Status LeavesDB::Insert(const std::string& /*table*/, Slice key,
                             const ReadonlyFields& values) {
   try {
-    EnsureMutationReady();
     leaves::Slice key_slice(key.data(), key.size());
     if (format_ == kConfluence) {
       confluence_cursor_.find(key_slice);
@@ -367,7 +350,6 @@ DB::Status LeavesDB::Insert(const std::string& /*table*/, Slice key,
       cursor_.value(value_slice);
     }
 
-    CommitMutation();
     return kOK;
   } catch (const std::exception& e) {
     std::cerr << "Leaves Insert error: " << e.what() << std::endl;
@@ -377,7 +359,6 @@ DB::Status LeavesDB::Insert(const std::string& /*table*/, Slice key,
 
 DB::Status LeavesDB::Delete(const std::string& /*table*/, Slice key) {
   try {
-    EnsureMutationReady();
     leaves::Slice key_slice(key.data(), key.size());
 
     if (format_ == kConfluence) {
@@ -400,10 +381,30 @@ DB::Status LeavesDB::Delete(const std::string& /*table*/, Slice key) {
 
       cursor_.remove();
     }
-    CommitMutation();
     return kOK;
   } catch (const std::exception& e) {
     std::cerr << "Leaves Delete error: " << e.what() << std::endl;
+    return kError;
+  }
+}
+
+DB::Status LeavesDB::Load(const std::string& /*table*/, Dataset &batch) {
+  try {
+    // Use single cursor transaction for efficient bulk loading.
+    cursor_.start_transaction(false, wal_enabled_);
+    int n = batch.OpCount();
+    for (int i = 0; i < n; ++i) {
+      const auto &item = batch.Next();
+      leaves::Slice key_slice(item.key.data(), item.key.size());
+      const auto &data = item.values.data();
+      leaves::Slice value_slice(data.data(), data.size());
+      cursor_.find(key_slice);
+      cursor_.value(value_slice);
+    }
+    cursor_.commit(sync_);
+    return kOK;
+  } catch (const std::exception& e) {
+    std::cerr << "Leaves Load error: " << e.what() << std::endl;
     return kError;
   }
 }

@@ -31,6 +31,7 @@ void BadgerDB::Init() {
   const utils::Properties &props = *props_;
 
   sync_writes_ = props.GetProperty(PROP_SYNC_WRITES, PROP_SYNC_WRITES_DEFAULT) == "true";
+  txn_active_ = false;
 
   const std::lock_guard<std::mutex> lock(mutex_);
 
@@ -50,6 +51,7 @@ void BadgerDB::Init() {
 }
 
 void BadgerDB::Cleanup() {
+  FlushPending();
   const std::lock_guard<std::mutex> lock(mutex_);
   if (--ref_cnt_) {
     return;
@@ -60,8 +62,124 @@ void BadgerDB::Cleanup() {
   }
 }
 
+DB::Status BadgerDB::BeginTransaction() {
+  if (txn_active_) return kError;
+  FlushPending();
+  txn_active_ = true;
+  batch_keys_.clear();
+  batch_vals_.clear();
+  return kOK;
+}
+
+DB::Status BadgerDB::CommitTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+
+  if (batch_keys_.empty()) {
+    return kOK;
+  }
+
+  // Build arrays for badger_batch_set
+  int n = batch_keys_.size();
+  std::vector<char*> keys(n);
+  std::vector<size_t> key_lens(n);
+  std::vector<char*> vals(n);
+  std::vector<size_t> val_lens(n);
+
+  for (int i = 0; i < n; i++) {
+    keys[i] = const_cast<char*>(batch_keys_[i].data());
+    key_lens[i] = batch_keys_[i].size();
+    vals[i] = const_cast<char*>(batch_vals_[i].data());
+    val_lens[i] = batch_vals_[i].size();
+  }
+
+  int ret = badger_batch_set(db_, keys.data(), key_lens.data(),
+                              vals.data(), val_lens.data(), n);
+  batch_keys_.clear();
+  batch_vals_.clear();
+
+  if (ret != BADGER_OK) {
+    return kError;
+  }
+  return kOK;
+}
+
+DB::Status BadgerDB::RollbackTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  batch_keys_.clear();
+  batch_vals_.clear();
+  return kOK;
+}
+
+void BadgerDB::FlushPending() {
+  // Called at thread exit; commit any accumulated batch.
+  if (txn_active_) {
+    txn_active_ = false;
+    // Commit the pending batch
+    if (!batch_keys_.empty()) {
+      int n = batch_keys_.size();
+      std::vector<char*> keys(n);
+      std::vector<size_t> key_lens(n);
+      std::vector<char*> vals(n);
+      std::vector<size_t> val_lens(n);
+
+      for (int i = 0; i < n; i++) {
+        keys[i] = const_cast<char*>(batch_keys_[i].data());
+        key_lens[i] = batch_keys_[i].size();
+        vals[i] = const_cast<char*>(batch_vals_[i].data());
+        val_lens[i] = batch_vals_[i].size();
+      }
+
+      badger_batch_set(db_, keys.data(), key_lens.data(),
+                       vals.data(), val_lens.data(), n);
+    }
+    batch_keys_.clear();
+    batch_vals_.clear();
+  }
+}
+
+DB::Status BadgerDB::Load(const std::string &table, Dataset &batch) {
+  FlushPending();
+
+  int n = batch.OpCount();
+  std::vector<std::string> keys;
+  std::vector<std::string> vals;
+  keys.reserve(n);
+  vals.reserve(n);
+
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    const auto &data = item.values.data();
+    keys.push_back(item.key.ToString());
+    vals.push_back(std::string(data.data(), data.size()));
+  }
+
+  std::vector<char*> key_ptrs(n);
+  std::vector<size_t> key_lens(n);
+  std::vector<char*> val_ptrs(n);
+  std::vector<size_t> val_lens(n);
+
+  for (int i = 0; i < n; i++) {
+    key_ptrs[i] = const_cast<char*>(keys[i].data());
+    key_lens[i] = keys[i].size();
+    val_ptrs[i] = const_cast<char*>(vals[i].data());
+    val_lens[i] = vals[i].size();
+  }
+
+  int ret = badger_batch_set(db_, key_ptrs.data(), key_lens.data(),
+                              val_ptrs.data(), val_lens.data(), n);
+  if (ret != BADGER_OK) {
+    return kError;
+  }
+  return kOK;
+}
+
 DB::Status BadgerDB::Read(const std::string &table, Slice key,
                           const std::unordered_set<std::string> *fields, Fields &result) {
+  // Reads always go directly to the DB (badger_batch_set doesn't support reading
+  // uncommitted data, and writes within a batch are still visible via normal reads
+  // since Badger's internal transactions are per-operation).
   char *val = nullptr;
   size_t val_len = 0;
 
@@ -121,7 +239,7 @@ DB::Status BadgerDB::Scan(const std::string &table, Slice key, int len,
 }
 
 DB::Status BadgerDB::Update(const std::string &table, Slice key, const ReadonlyFields &values) {
-  // Read current value
+  // Read current value from DB
   char *val = nullptr;
   size_t val_len = 0;
   int ret = badger_get(db_, const_cast<char *>(key.data()), key.size(),
@@ -140,10 +258,18 @@ DB::Status BadgerDB::Update(const std::string &table, Slice key, const ReadonlyF
   badger_free(val);
 
   const auto& buffer = updated_fields_.buffer();
-  ret = badger_set(db_, const_cast<char *>(key.data()), key.size(),
-                    const_cast<char *>(buffer.data()), buffer.size());
-  if (ret != BADGER_OK) {
-    return kError;
+
+  if (txn_active_) {
+    // Accumulate in batch buffer
+    batch_keys_.push_back(key.ToString());
+    batch_vals_.push_back(std::string(buffer.data(), buffer.size()));
+  } else {
+    // Write directly to DB
+    ret = badger_set(db_, const_cast<char *>(key.data()), key.size(),
+                      const_cast<char *>(buffer.data()), buffer.size());
+    if (ret != BADGER_OK) {
+      return kError;
+    }
   }
   return kOK;
 }
@@ -151,15 +277,23 @@ DB::Status BadgerDB::Update(const std::string &table, Slice key, const ReadonlyF
 DB::Status BadgerDB::Insert(const std::string &table, Slice key, const ReadonlyFields &values) {
   const auto &data = values.data();
 
-  int ret = badger_set(db_, const_cast<char *>(key.data()), key.size(),
-                       const_cast<char *>(data.data()), data.size());
-  if (ret != BADGER_OK) {
-    return kError;
+  if (txn_active_) {
+    // Accumulate in batch buffer
+    batch_keys_.push_back(key.ToString());
+    batch_vals_.push_back(std::string(data.data(), data.size()));
+  } else {
+    int ret = badger_set(db_, const_cast<char *>(key.data()), key.size(),
+                         const_cast<char *>(data.data()), data.size());
+    if (ret != BADGER_OK) {
+      return kError;
+    }
   }
   return kOK;
 }
 
 DB::Status BadgerDB::Delete(const std::string &table, Slice key) {
+  // Badger's cbadger API doesn't support batch delete.
+  // Issue delete directly to DB even during a transaction.
   int ret = badger_delete(db_, const_cast<char *>(key.data()), key.size());
   if (ret == BADGER_NOT_FOUND) {
     return kNotFound;

@@ -107,9 +107,6 @@ namespace {
   const std::string PROP_SYNC = "rocksdb.sync";
   const std::string PROP_SYNC_DEFAULT = "false";
 
-  const std::string PROP_BATCH_SIZE = "rocksdb.batch_size";
-  const std::string PROP_BATCH_SIZE_DEFAULT = "1";
-
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
 #if ROCKSDB_MAJOR < 8
@@ -173,9 +170,7 @@ void RocksdbDB::Init() {
   fieldcount_ = std::stoi(props.GetProperty(CoreWorkload::FIELD_COUNT_PROPERTY,
                                               CoreWorkload::FIELD_COUNT_DEFAULT));
 
-  batch_size_ = std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
-  if (batch_size_ < 1) batch_size_ = 1;
-  pending_ = 0;
+  txn_active_ = false;
   write_batch_.Clear();
 
   ref_cnt_++;
@@ -215,7 +210,7 @@ void RocksdbDB::Init() {
 
 void RocksdbDB::Cleanup() { 
   const std::lock_guard<std::mutex> lock(mu_);
-  FlushBatch();
+  FlushWriteBatch();
   if (--ref_cnt_) {
     return;
   }
@@ -226,6 +221,30 @@ void RocksdbDB::Cleanup() {
     }
   }
   delete db_;
+}
+
+DB::Status RocksdbDB::BeginTransaction() {
+  write_batch_.Clear();
+  txn_active_ = true;
+  return kOK;
+}
+
+DB::Status RocksdbDB::CommitTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  FlushWriteBatch();
+  return kOK;
+}
+
+DB::Status RocksdbDB::RollbackTransaction() {
+  if (!txn_active_) return kNotImplemented;
+  txn_active_ = false;
+  write_batch_.Clear();
+  return kOK;
+}
+
+void RocksdbDB::FlushPending() {
+  FlushWriteBatch();
 }
 
 void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt,
@@ -366,10 +385,22 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
   }
 }
 
+DB::Status RocksdbDB::Load(const std::string &table, Dataset &batch) {
+  write_batch_.Clear();
+  int n = batch.OpCount();
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    const auto &data = item.values.data();
+    write_batch_.Put(rocksdb::Slice(item.key.data(), item.key.size()),
+                     rocksdb::Slice(data.data(), data.size()));
+  }
+  FlushWriteBatch();
+  return kOK;
+}
+
 DB::Status RocksdbDB::ReadSingle(const std::string &table, Slice key,
                                   const std::unordered_set<std::string> *fields,
                                   Fields &result) {
-  FlushBatch();
   std::string data;
   rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), rocksdb::Slice(key.data(), key.size()), &data);
   if (s.IsNotFound()) {
@@ -389,7 +420,6 @@ DB::Status RocksdbDB::ReadSingle(const std::string &table, Slice key,
 DB::Status RocksdbDB::ScanSingle(const std::string &table, Slice key, int len,
                                    const std::unordered_set<std::string> *fields,
                                    std::vector<Fields> &result) {
-  FlushBatch();
   rocksdb::Iterator *db_iter = db_->NewIterator(rocksdb::ReadOptions());
   db_iter->Seek(rocksdb::Slice(key.data(), key.size()));
   for (int i = 0; db_iter->Valid() && i < len; i++) {
@@ -410,7 +440,6 @@ DB::Status RocksdbDB::ScanSingle(const std::string &table, Slice key, int len,
 
 DB::Status RocksdbDB::UpdateSingle(const std::string &table, Slice key,
                                    const ReadonlyFields &values) {
-  FlushBatch();
   std::string data;
   rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), rocksdb::Slice(key.data(), key.size()), &data);
   if (s.IsNotFound()) {
@@ -424,7 +453,6 @@ DB::Status RocksdbDB::UpdateSingle(const std::string &table, Slice key,
   updated_fields_.update(values);
   const auto& buffer = updated_fields_.buffer();
   write_batch_.Put(rocksdb::Slice(key.data(), key.size()), rocksdb::Slice(buffer.data(), buffer.size()));
-  CommitMutation();
   return kOK;
 }
 
@@ -432,7 +460,6 @@ DB::Status RocksdbDB::MergeSingle(const std::string &table, Slice key,
                                   const ReadonlyFields &values) {
   const auto& data = values.data();
   write_batch_.Merge(rocksdb::Slice(key.data(), key.size()), rocksdb::Slice(data.data(), data.size()));
-  CommitMutation();
   return kOK;
 }
 
@@ -440,13 +467,11 @@ DB::Status RocksdbDB::InsertSingle(const std::string &table, Slice key,
                                    const ReadonlyFields &values) {
   const auto& data = values.data();
   write_batch_.Put(rocksdb::Slice(key.data(), key.size()), rocksdb::Slice(data.data(), data.size()));
-  CommitMutation();
   return kOK;
 }
 
 DB::Status RocksdbDB::DeleteSingle(const std::string &table, Slice key) {
   write_batch_.Delete(rocksdb::Slice(key.data(), key.size()));
-  CommitMutation();
   return kOK;
 }
 

@@ -85,6 +85,18 @@ DB::Status BasicDB::Insert(const std::string &table, Slice key,
   return kOK;
 }
 
+DB::Status BasicDB::Load(const std::string &table, Dataset &batch) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  *out_ << "LOAD " << table << " [ ";
+  int n = batch.OpCount();
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    *out_ << item.key.ToString() << ' ';
+  }
+  *out_ << ']' << std::endl;
+  return kOK;
+}
+
 DB::Status BasicDB::Delete(const std::string &table, Slice key) {
   std::lock_guard<std::mutex> lock(mutex_);
   *out_ << "DELETE " << table << ' ' << key.ToString() << std::endl;

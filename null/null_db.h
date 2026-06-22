@@ -42,6 +42,10 @@ class NullDB : public DB {
   Status Delete(const std::string &table, Slice key) override {
     return kOK;
   }
+
+  Status Load(const std::string &table, Dataset &batch) override {
+    return kOK;
+  }
 };
 
 } // namespace ycsbc

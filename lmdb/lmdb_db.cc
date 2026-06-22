@@ -42,9 +42,6 @@ const std::string PROP_WRITEMAP_DEFAULT = "false";
 
 const std::string PROP_MAPASYNC = "lmdb.mapasync";
 const std::string PROP_MAPASYNC_DEFAULT = "false";
-
-const std::string PROP_BATCH_SIZE = "lmdb.batch_size";
-const std::string PROP_BATCH_SIZE_DEFAULT = "1";
 }  // namespace
 
 namespace ycsbc {
@@ -60,11 +57,8 @@ std::mutex LmdbDB::mutex_;
 void LmdbDB::Init() {
   const utils::Properties& props = *props_;
 
-  batch_size_ =
-      std::stoi(props.GetProperty(PROP_BATCH_SIZE, PROP_BATCH_SIZE_DEFAULT));
-  if (batch_size_ < 1) batch_size_ = 1;
-  pending_ = 0;
   write_txn_ = nullptr;
+  txn_active_ = false;
 
   const std::lock_guard<std::mutex> lock(mutex_);
 
@@ -141,7 +135,7 @@ void LmdbDB::Init() {
 }
 
 void LmdbDB::Cleanup() {
-  FlushBatch();
+  FlushPending();
   const std::lock_guard<std::mutex> lock(mutex_);
   if (--ref_cnt_) {
     return;
@@ -150,16 +144,27 @@ void LmdbDB::Cleanup() {
   mdb_env_close(env_);
 }
 
+void LmdbDB::FlushPending() {
+  // Called at thread exit; commit any active write transaction.
+  if (write_txn_ != nullptr) {
+    int ret = mdb_txn_commit(write_txn_);
+    write_txn_ = nullptr;
+    txn_active_ = false;
+    if (ret)
+      throw utils::Exception(std::string("FlushPending mdb_txn_commit: ") +
+                             mdb_strerror(ret));
+  }
+}
+
 DB::Status LmdbDB::BeginTransaction() {
   if (txn_active_) return kError;
-  FlushBatch();
+  FlushPending();
   if (!write_txn_) {
     int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
     if (ret)
       throw utils::Exception(std::string("BeginTransaction mdb_txn_begin: ") +
                              mdb_strerror(ret));
   }
-  pending_ = 0;
   txn_active_ = true;
   return kOK;
 }
@@ -169,7 +174,6 @@ DB::Status LmdbDB::CommitTransaction() {
   txn_active_ = false;
   int ret = mdb_txn_commit(write_txn_);
   write_txn_ = nullptr;
-  pending_ = 0;
   if (ret)
     throw utils::Exception(std::string("CommitTransaction mdb_txn_commit: ") +
                            mdb_strerror(ret));
@@ -181,7 +185,6 @@ DB::Status LmdbDB::RollbackTransaction() {
   txn_active_ = false;
   mdb_txn_abort(write_txn_);
   write_txn_ = nullptr;
-  pending_ = 0;
   return kOK;
 }
 
@@ -210,9 +213,9 @@ DB::Status LmdbDB::Read(const std::string& table, Slice key,
     return kOK;
   }
 
-  FlushBatch();
+  // No transaction active: use a short-lived read-only transaction.
   MDB_txn* txn;
-  // Use MDB_RDONLY | MDB_NOTLS for fast lock-free reads
+  // Use MDB_RDONLY for fast lock-free reads
   ret = mdb_txn_begin(env_, nullptr, MDB_RDONLY, &txn);
   if (ret) {
     throw utils::Exception(std::string("Read mdb_txn_begin: ") +
@@ -245,7 +248,6 @@ DB::Status LmdbDB::Scan(const std::string& table, Slice key, int len,
                         const std::unordered_set<std::string>* fields,
                         std::vector<Fields>& result) {
   DB::Status s = kOK;
-  FlushBatch();
   MDB_txn* txn;
   MDB_cursor* cursor;
   MDB_val key_slice = {key.size(), const_cast<char*>(key.data())};
@@ -292,7 +294,6 @@ cleanup:
 
 DB::Status LmdbDB::Update(const std::string& table, Slice key,
                           const ReadonlyFields& values) {
-  FlushBatch();
   MDB_val key_slice = {key.size(), const_cast<char*>(key.data())};
   MDB_val val_slice;
 
@@ -320,7 +321,6 @@ DB::Status LmdbDB::Update(const std::string& table, Slice key,
   if (ret) {
     throw utils::Exception(std::string("Update mdb_put: ") + mdb_strerror(ret));
   }
-  CommitMutation();
   return kOK;
 }
 
@@ -341,7 +341,6 @@ DB::Status LmdbDB::Insert(const std::string& table, Slice key,
   int ret = mdb_put(write_txn_, dbi_, &key_slice, &val_slice, 0);
   if (ret)
     throw utils::Exception(std::string("Insert mdb_put: ") + mdb_strerror(ret));
-  CommitMutation();
   return kOK;
 }
 
@@ -357,7 +356,40 @@ DB::Status LmdbDB::Delete(const std::string& table, Slice key) {
   int ret = mdb_del(write_txn_, dbi_, &key_slice, nullptr);
   if (ret)
     throw utils::Exception(std::string("Delete mdb_del: ") + mdb_strerror(ret));
-  CommitMutation();
+  return kOK;
+}
+
+DB::Status LmdbDB::Load(const std::string& /*table*/, Dataset &batch) {
+  FlushPending();
+
+  int ret = mdb_txn_begin(env_, nullptr, 0, &write_txn_);
+  if (ret) {
+    throw utils::Exception(std::string("Load mdb_txn_begin: ") +
+                           mdb_strerror(ret));
+  }
+
+  int n = batch.OpCount();
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    MDB_val key_slice = {item.key.size(), const_cast<char*>(item.key.data())};
+    auto data = item.values.data();
+    MDB_val val_slice;
+    val_slice.mv_data = static_cast<void*>(const_cast<char*>(data.data()));
+    val_slice.mv_size = data.size();
+    ret = mdb_put(write_txn_, dbi_, &key_slice, &val_slice, 0);
+    if (ret) {
+      mdb_txn_abort(write_txn_);
+      write_txn_ = nullptr;
+      throw utils::Exception(std::string("Load mdb_put: ") + mdb_strerror(ret));
+    }
+  }
+
+  ret = mdb_txn_commit(write_txn_);
+  write_txn_ = nullptr;
+  if (ret) {
+    throw utils::Exception(std::string("Load mdb_txn_commit: ") +
+                           mdb_strerror(ret));
+  }
   return kOK;
 }
 
