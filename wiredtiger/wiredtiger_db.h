@@ -7,6 +7,7 @@
 #include <string>
 #include <mutex>
 
+#include "core/dataset.h"
 #include "core/db.h"
 #include "utils/properties.h"
 
@@ -33,8 +34,9 @@ class WTDB : public DB {
   Status RollbackTransaction();
 
   Status Read(const std::string &table, Slice key,
-              const std::unordered_set<std::string> *fields, Fields &result) {
-    return (this->*(method_read_))(table, key, fields, result);
+              const std::unordered_set<std::string> *fields, Fields &result,
+              bool rmw = false) {
+    return (this->*(method_read_))(table, key, fields, result, rmw);
   }
 
   Status Scan(const std::string &table, Slice key, int len,
@@ -54,10 +56,13 @@ class WTDB : public DB {
     return (this->*(method_delete_))(table, key);
   }
 
+  Status Load(const std::string &table, Dataset &batch);
+
  private:
 
   Status ReadSingleEntry(const std::string &table, Slice key,
-                         const std::unordered_set<std::string> *fields, Fields &result);
+                         const std::unordered_set<std::string> *fields, Fields &result,
+                         bool rmw = false);
   Status ScanSingleEntry(const std::string &table, Slice key, int len,
                          const std::unordered_set<std::string> *fields,
                          std::vector<Fields> &result);
@@ -68,7 +73,8 @@ class WTDB : public DB {
   Status DeleteSingleEntry(const std::string &table, Slice key);
 
   Status (WTDB::*method_read_)(const std::string &, Slice,
-                                    const std::unordered_set<std::string> *, Fields &);
+                                    const std::unordered_set<std::string> *, Fields &,
+                                    bool);
   Status (WTDB::*method_scan_)(const std::string &, Slice, int,
                                     const std::unordered_set<std::string> *,
                                     std::vector<Fields> &);

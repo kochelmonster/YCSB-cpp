@@ -18,6 +18,8 @@
 
 namespace ycsbc {
 
+class Dataset;
+
 ///
 /// Database interface layer.
 /// per-thread DB instance.
@@ -32,7 +34,8 @@ class DB {
     kOK = 0,
     kError,
     kNotFound,
-    kNotImplemented
+    kNotImplemented,
+    kSkip       // Operation intentionally skipped (e.g., Read in RMW when Update reads anyway)
   };
   ///
   /// Initializes any state for accessing this DB.
@@ -72,7 +75,7 @@ class DB {
   ///
   virtual Status Read(const std::string &table, Slice key,
                    const std::unordered_set<std::string> *fields,
-                   Fields &result) = 0;
+                   Fields &result, bool rmw = false) = 0;
   ///
   /// Performs a range scan for a set of records in the database.
   /// Field/value pairs from the result are stored in a vector of Fields objects.
@@ -120,11 +123,16 @@ class DB {
   virtual Status Delete(const std::string &table, Slice key) = 0;
 
   ///
-  /// Whether this DB supports concurrent writes from multiple threads.
-  /// If false and dedicated_writer is enabled, writes will be funneled
-  /// through a single dedicated writer thread.
+  /// Bulk-load a set of pre-generated operations into the database.
+  /// The default implementation returns kNotImplemented.
+  /// Adapters should override this to use their most efficient bulk-load
+  /// path (e.g. WriteBatch for LevelDB, single cursor transaction for Leaves).
   ///
-  virtual bool SupportsMultiThreadWrite() const { return true; }
+  /// @param table The name of the table.
+  /// @param batch A Dataset containing only INSERT WorkItems.
+  /// @return kOK on success, or a non-zero error code on error.
+  ///
+  virtual Status Load(const std::string &table, Dataset &batch) = 0;
 
   virtual ~DB() { }
 

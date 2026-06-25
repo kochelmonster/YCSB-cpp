@@ -33,6 +33,9 @@ enum Operation {
   SCAN,
   READMODIFYWRITE,
   DELETE,
+  BEGIN_TXN,
+  COMMIT_TXN,
+  ROLLBACK_TXN,
   INSERT_FAILED,
   READ_FAILED,
   UPDATE_FAILED,
@@ -175,8 +178,8 @@ class CoreWorkload {
   ///
   static const std::string ZIPFIAN_CONST_PROPERTY;
 
-  static const std::string TRANSACTION_MODE_PROPERTY;
-  static const std::string TRANSACTION_MODE_DEFAULT;
+  static const std::string BATCH_SIZE_PROPERTY;
+  static const std::string BATCH_SIZE_DEFAULT;
 
   ///
   /// Initialize the scenario.
@@ -212,7 +215,7 @@ class CoreWorkload {
       field_len_generator_(nullptr), key_chooser_(nullptr), field_chooser_(nullptr),
       scan_len_chooser_(nullptr), insert_key_sequence_(nullptr),
       transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), record_count_(0),
-      explicit_transaction_mode_(false) {
+      batch_size_(1) {
   }
 
   virtual ~CoreWorkload() {
@@ -225,6 +228,8 @@ class CoreWorkload {
   }
 
   const std::string &GetPropertiesHash() const { return properties_hash_; }
+
+  int batch_size() const { return batch_size_; }
 
  protected:
   static Generator<uint64_t> *GetFieldLenGenerator(const utils::Properties &p);
@@ -241,7 +246,6 @@ class CoreWorkload {
   DB::Status TransactionScan(DB &db);
   DB::Status TransactionUpdate(DB &db);
   DB::Status TransactionInsert(DB &db);
-  DB::Status TransactionMultiKeyAcid(DB &db);
 
   std::string table_name_;
   int field_count_;
@@ -259,7 +263,7 @@ class CoreWorkload {
   std::string hash_algo_;
   size_t record_count_;
   int zero_padding_;
-  bool explicit_transaction_mode_;
+  int batch_size_;
   std::string properties_hash_;
   
   // Pre-built field names to avoid string construction in hot path

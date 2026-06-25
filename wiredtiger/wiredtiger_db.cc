@@ -326,7 +326,10 @@ DB::Status WTDB::RollbackTransaction() {
 
 DB::Status WTDB::ReadSingleEntry(const std::string& table, Slice key,
                                  const std::unordered_set<std::string>* fields,
-                                 Fields& result) {
+                                 Fields& result, bool rmw) {
+  // When rmw is true, UpdateSingleEntry() will re-read and merge internally.
+  if (rmw) return kSkip;
+
   WT_ITEM k = {key.data(), key.size()};
   WT_ITEM v;
   int ret;
@@ -432,6 +435,23 @@ DB::Status WTDB::DeleteSingleEntry(const std::string& table, Slice key) {
   WT_ITEM k = {key.data(), key.size()};
   cursor_->set_key(cursor_, &k);
   error_check(cursor_->remove(cursor_));
+  return kOK;
+}
+
+DB::Status WTDB::Load(const std::string &table, Dataset &batch) {
+  int n = batch.OpCount();
+  WT_ITEM k, v;
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    const auto &data = item.values.data();
+    k.data = item.key.data();
+    k.size = item.key.size();
+    v.data = data.data();
+    v.size = data.size();
+    cursor_->set_key(cursor_, &k);
+    cursor_->set_value(cursor_, &v);
+    error_check(cursor_->insert(cursor_));
+  }
   return kOK;
 }
 

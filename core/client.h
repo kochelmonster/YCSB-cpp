@@ -33,35 +33,51 @@ inline int ClientThread(ycsbc::DB* db, CoreWorkload* wl, const int num_ops,
     Fields result_buf;
     std::vector<Fields> scan_result_buf;
     const std::string& table = wl->table_name();
-    for (int i = 0; i < num_ops; ++i) {
-      if (rlim) {
-        rlim->Consume(1);
-      }
-      const auto& item = dataset->Next();
-      const auto& values = item.values;
+    const int batch_size = wl->batch_size();
 
-      switch (item.type) {
-        case CoreWorkload::WorkItem::OpType::INSERT:
-          db->Insert(table, item.key, values);
-          break;
-        case CoreWorkload::WorkItem::OpType::UPDATE:
-          db->Update(table, item.key, values);
-          break;
-        case CoreWorkload::WorkItem::OpType::READ:
-          result_buf.clear();
-          db->Read(table, item.key, nullptr, result_buf);
-          break;
-        case CoreWorkload::WorkItem::OpType::SCAN:
-          scan_result_buf.clear();
-          db->Scan(table, item.key, item.scan_len, nullptr, scan_result_buf);
-          break;
-        case CoreWorkload::WorkItem::OpType::READMODIFYWRITE:
-          result_buf.clear();
-          db->Read(table, item.key, nullptr, result_buf);
-          db->Update(table, item.key, result_buf);
-          break;
+    for (int i = 0; i < num_ops; i += batch_size) {
+      if (rlim) {
+        rlim->Consume(batch_size);
       }
-      ops++;
+
+      int batch_end = std::min(i + batch_size, num_ops);
+      int batch_len = batch_end - i;
+
+      // Begin transaction for this batch.  The adapter may decide to
+      // optimise single-operation batches (batch_size==1) differently
+      // from multi-operation batches.
+      db->BeginTransaction();
+
+      for (int j = 0; j < batch_len; ++j) {
+        const auto& item = dataset->Next();
+        const auto& values = item.values;
+
+        switch (item.type) {
+          case CoreWorkload::WorkItem::OpType::INSERT:
+            db->Insert(table, item.key, values);
+            break;
+          case CoreWorkload::WorkItem::OpType::UPDATE:
+            db->Update(table, item.key, values);
+            break;
+          case CoreWorkload::WorkItem::OpType::READ:
+            result_buf.clear();
+            db->Read(table, item.key, nullptr, result_buf);
+            break;
+          case CoreWorkload::WorkItem::OpType::SCAN:
+            scan_result_buf.clear();
+            db->Scan(table, item.key, item.scan_len, nullptr, scan_result_buf);
+            break;
+          case CoreWorkload::WorkItem::OpType::READMODIFYWRITE:
+            result_buf.clear();
+            db->Read(table, item.key, nullptr, result_buf, true);
+            db->Update(table, item.key, item.values);
+            break;
+        }
+        ops++;
+      }
+
+      // Commit transaction for this batch.
+      db->CommitTransaction();
     }
 
     // Flush any pending writes (e.g. partial batch) so locks are released

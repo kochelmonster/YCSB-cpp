@@ -10,12 +10,13 @@
             "request": "launch",
             "program": "${workspaceFolder}/build-debug/ycsb",
             "args": [
+                "-run",
                 "-db",
                 "lmdb",
                 "-P",
                 "lmdb/lmdb.properties",
                 "-P",
-                "./workloads/workload_kv_session",
+                "./workloads/workload_kv_rmw",
                 "-s"
             ],
             "stopAtEntry": false,
@@ -90,13 +91,13 @@
             "request": "launch",
             "program": "${workspaceFolder}/build-debug/ycsb",
             "args": [
+                "-load",
                 "-db",
                 "leaves",
                 "-P",
                 "leaves/leaves.properties",
                 "-P",
-                "workloads/workloada",
-                "-run",
+                "./workloads/workload_kv_concurrent_session",
                 "-s"
             ],
             "stopAtEntry": false,

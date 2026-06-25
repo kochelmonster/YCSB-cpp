@@ -15,6 +15,7 @@
 #include <string>
 #include <utility>
 
+#include "core/dataset.h"
 #include "core/db.h"
 #include "utils/properties.h"
 
@@ -28,8 +29,6 @@ class LeavesDB : public DB {
  public:
   LeavesDB()
       : fieldcount_(0),
-        batch_size_(1),
-        pending_(0),
         txn_active_(false) {}
   ~LeavesDB() {}
 
@@ -38,7 +37,8 @@ class LeavesDB : public DB {
   void Cleanup();
 
   Status Read(const std::string& table, Slice key,
-              const std::unordered_set<std::string>* fields, Fields& result) override;
+              const std::unordered_set<std::string>* fields, Fields& result,
+              bool rmw = false) override;
 
   Status Scan(const std::string& table, Slice key, int len,
               const std::unordered_set<std::string>* fields,
@@ -52,13 +52,13 @@ class LeavesDB : public DB {
 
   Status Delete(const std::string& table, Slice key) override;
 
-  Status BeginTransaction();
-  Status CommitTransaction();
-  Status RollbackTransaction();
-
-  bool SupportsMultiThreadWrite() const override;
+  Status BeginTransaction() override;
+  Status CommitTransaction() override;
+  Status RollbackTransaction() override;
 
   void FlushPending() override;
+
+  Status Load(const std::string &table, Dataset &batch) override;
 
  private:
   using SingleDB = leaves::TDB<leaves::MapStorage>;
@@ -79,38 +79,14 @@ class LeavesDB : public DB {
 
   int fieldcount_;
   std::string dbpath_;
+  size_t batch_size_;
   size_t mapsize_;
   SingleCursor cursor_;
   leaves::MapConfluenceCursor confluence_cursor_;
   Fields updated_fields_;
   bool sync_ = false;
   bool wal_enabled_ = false;
-  int batch_size_ = 1;
-  int pending_;
   bool txn_active_;
-
-  // Record one mutation; commit when batch is full.
-  void CommitMutation() {
-    if (txn_active_) return;
-    if (++pending_ >= batch_size_) {
-      if (format_ == kConfluence) {
-        confluence_cursor_.commit(sync_);
-      } else {
-        cursor_.commit(sync_);
-      }
-      pending_ = 0;
-    }
-  }
-
-  void EnsureMutationReady() {
-    if (!txn_active_ && pending_ == 0) {
-      if (format_ == kConfluence) {
-        confluence_cursor_.start_transaction();
-      } else {
-        cursor_.start_transaction(false, wal_enabled_);
-      }
-    }
-  }
 };
 
 DB* NewLeavesDB();

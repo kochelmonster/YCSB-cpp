@@ -21,6 +21,8 @@ Dataset::Dataset(const utils::Properties& props, CoreWorkload& workload,
       thread_id_(thread_id),
       is_loading_(is_loading),
       workload_props_hash_(workload.GetPropertiesHash()),
+      force_generate_(false),
+      op_count_(0),
       fd_(-1),
       map_(nullptr),
       size_(0),
@@ -40,6 +42,7 @@ Dataset::~Dataset() {
 }
 
 void Dataset::Open(int op_count) {
+  op_count_ = op_count;
   fd_ = open(GetFullPath(op_count).c_str(), O_RDONLY);
   if (fd_ == -1) {
     throw utils::Exception("Failed to open dataset file");
@@ -98,18 +101,11 @@ void Dataset::DEBUG(int op_count) {
         break;
     }
 
-#if 0
+
     std::cout << "Testitem: " << i << ": " << type_str << " " << item.key.size() << " with "
               << values.size() << " fields" << "  size: " << values.data().size() << std::endl;
-#endif
-
-    if (values.data().size() > 2048) {
-      std::cout << "Error Testitem: " << i << ": " << type_str << " " << item.key.size() << " with "
-              << values.size() << " fields" << "  size: " << values.data().size() << std::endl;
-      throw std::runtime_error("Field data size exceeds 2048 bytes");
-    }
       
-#if 0
+
     ReadonlyFields readonly(values);
     // check correctnes of the values
     for (auto current_it = readonly.begin(); current_it != readonly.end();
@@ -117,7 +113,7 @@ void Dataset::DEBUG(int op_count) {
       std::cout << "  field name: " << current_it.name().ToString()
                 << ", value size: " << current_it.value().size() << std::endl;
     }
-#endif
+
   }
 
   if (map_) {
@@ -170,7 +166,8 @@ const CoreWorkload::WorkItem& Dataset::Next() {
 
   switch (current_work_item_.type) {
     case CoreWorkload::WorkItem::OpType::INSERT:
-    case CoreWorkload::WorkItem::OpType::UPDATE: {
+    case CoreWorkload::WorkItem::OpType::UPDATE:
+    case CoreWorkload::WorkItem::OpType::READMODIFYWRITE: {
       uint32_t fields_size =
           *reinterpret_cast<const uint32_t*>(op_specific_data_ptr);
       current_work_item_.values =

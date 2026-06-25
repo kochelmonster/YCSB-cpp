@@ -10,6 +10,7 @@
 #define YCSB_C_BASIC_DB_H_
 
 #include "db.h"
+#include "core/dataset.h"
 #include "utils/properties.h"
 
 #include <iostream>
@@ -25,7 +26,8 @@ class BasicDB : public DB {
   void Init();
 
   Status Read(const std::string &table, Slice key,
-              const std::unordered_set<std::string> *fields, Fields &result);
+              const std::unordered_set<std::string> *fields, Fields &result,
+              bool rmw = false);
 
   Status Scan(const std::string &table, Slice key, int len,
               const std::unordered_set<std::string> *fields, std::vector<Fields> &result);
@@ -35,6 +37,8 @@ class BasicDB : public DB {
   Status Insert(const std::string &table, Slice key, const ReadonlyFields &values);
 
   Status Delete(const std::string &table, Slice key);
+
+  Status Load(const std::string &table, Dataset &batch) override;
 
  private:
   static std::mutex mutex_;

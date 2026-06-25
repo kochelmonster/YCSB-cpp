@@ -44,6 +44,9 @@ const char *ycsbc::kOperationString[ycsbc::MAXOPTYPE] = {
   "SCAN",
   "READMODIFYWRITE",
   "DELETE",
+  "BEGIN_TXN",
+  "COMMIT_TXN",
+  "ROLLBACK_TXN",
   "INSERT-FAILED",
   "READ-FAILED",
   "UPDATE-FAILED",
@@ -116,8 +119,8 @@ const std::string CoreWorkload::FIELD_NAME_PREFIX = "fieldnameprefix";
 const std::string CoreWorkload::FIELD_NAME_PREFIX_DEFAULT = "field";
 
 const std::string CoreWorkload::ZIPFIAN_CONST_PROPERTY = "zipfian_const";
-const std::string CoreWorkload::TRANSACTION_MODE_PROPERTY = "transactionmode";
-const std::string CoreWorkload::TRANSACTION_MODE_DEFAULT = "none";
+const std::string CoreWorkload::BATCH_SIZE_PROPERTY = "batch_size";
+const std::string CoreWorkload::BATCH_SIZE_DEFAULT = "1";
 
 namespace ycsbc {
 
@@ -155,7 +158,8 @@ void CoreWorkload::Init(const utils::Properties &p) {
   int insert_start = std::stoi(p.GetProperty(INSERT_START_PROPERTY, INSERT_START_DEFAULT));
 
   zero_padding_ = std::stoi(p.GetProperty(ZERO_PADDING_PROPERTY, ZERO_PADDING_DEFAULT));
-  explicit_transaction_mode_ = p.GetProperty(TRANSACTION_MODE_PROPERTY, TRANSACTION_MODE_DEFAULT) == "multikey_acid";
+  batch_size_ = std::stoi(p.GetProperty(BATCH_SIZE_PROPERTY, BATCH_SIZE_DEFAULT));
+  if (batch_size_ < 1) batch_size_ = 1;
 
   read_all_fields_ = utils::StrToBool(p.GetProperty(READ_ALL_FIELDS_PROPERTY,
                                                     READ_ALL_FIELDS_DEFAULT));
@@ -338,10 +342,6 @@ bool CoreWorkload::DoInsert(DB &db) {
 }
 
 bool CoreWorkload::DoTransaction(DB &db) {
-  if (explicit_transaction_mode_) {
-    return TransactionMultiKeyAcid(db) == DB::kOK;
-  }
-
   DB::Status status;
   switch (op_chooser_.Next()) {
     case READ:
@@ -386,9 +386,9 @@ DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
   if (!read_all_fields()) {
     tl_fields_buffer.clear();
     tl_fields_buffer.insert(NextFieldName());
-    db.Read(table_name_, tl_key_buffer, &tl_fields_buffer, tl_result_buffer);
+    db.Read(table_name_, tl_key_buffer, &tl_fields_buffer, tl_result_buffer, true);
   } else {
-    db.Read(table_name_, tl_key_buffer, NULL, tl_result_buffer);
+    db.Read(table_name_, tl_key_buffer, NULL, tl_result_buffer, true);
   }
 
   tl_values_buffer.clear();
@@ -492,7 +492,8 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
     uint32_t op_specific_data_len = 0;
     switch (item.type) {
       case WorkItem::OpType::INSERT:
-      case WorkItem::OpType::UPDATE: {
+      case WorkItem::OpType::UPDATE:
+      case WorkItem::OpType::READMODIFYWRITE: {
         const std::string& buffer = item.values.buffer();
         op_specific_data_len += sizeof(uint32_t) + buffer.size();
         break;
@@ -521,7 +522,8 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
 
     switch (item.type) {
       case WorkItem::OpType::INSERT:
-      case WorkItem::OpType::UPDATE: {
+      case WorkItem::OpType::UPDATE:
+      case WorkItem::OpType::READMODIFYWRITE: {
         const std::string& buffer = item.values.buffer();
         uint32_t fields_size = buffer.size();
         ofs.write(reinterpret_cast<const char*>(&fields_size), sizeof(fields_size));
@@ -538,56 +540,5 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
   }
 }
 
-DB::Status CoreWorkload::TransactionMultiKeyAcid(DB &db) {
-  uint64_t first_key_num = NextTransactionKeyNum();
-  uint64_t second_key_num;
-  do {
-    second_key_num = NextTransactionKeyNum();
-  } while (record_count_ > 1 && second_key_num == first_key_num);
-
-  std::string first_key = BuildKeyName(first_key_num);
-  std::string second_key = BuildKeyName(second_key_num);
-
-  DB::Status status = db.BeginTransaction();
-  if (status != DB::kOK) {
-    return status;
-  }
-
-  tl_result_buffer.clear();
-  status = db.Read(table_name_, first_key, NULL, tl_result_buffer);
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-    return status;
-  }
-
-  Fields second_result;
-  status = db.Read(table_name_, second_key, NULL, second_result);
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-    return status;
-  }
-
-  tl_values_buffer.clear();
-  BuildSingleValue(tl_values_buffer);
-  status = db.Update(table_name_, first_key, tl_values_buffer);
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-    return status;
-  }
-
-  Fields second_update;
-  BuildSingleValue(second_update);
-  status = db.Update(table_name_, second_key, second_update);
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-    return status;
-  }
-
-  status = db.CommitTransaction();
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-  }
-  return status;
-}
-
 } // ycsbc
+

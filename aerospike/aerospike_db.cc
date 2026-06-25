@@ -211,7 +211,7 @@ void AerospikeDB::ReadCallback(as_error* err, as_record* record, void* udata, as
 
 DB::Status AerospikeDB::Read(const std::string &table, Slice key,
                               const std::unordered_set<std::string> *fields,
-                              Fields &result) {
+                              Fields &result, bool /*rmw*/) {
   if (async_mode_) {
     // Async mode
     while (pending_ops_.load() >= max_concurrent_) {
@@ -277,7 +277,7 @@ DB::Status AerospikeDB::Scan(const std::string &table, Slice key, int record_cou
     std::string scan_key = key.ToString() + std::to_string(i);
     Fields record;
     
-    Status s = Read(table, scan_key, fields, record);
+    Status s = Read(table, scan_key, fields, record, false);
     if (s == kOK) {
       result.push_back(std::move(record));
     }

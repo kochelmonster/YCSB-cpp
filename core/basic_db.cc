@@ -29,7 +29,8 @@ void BasicDB::Init() {
 }
 
 DB::Status BasicDB::Read(const std::string &table, Slice key,
-                         const std::unordered_set<std::string> *fields, Fields &result) {
+                         const std::unordered_set<std::string> *fields, Fields &result,
+                         bool rmw) {
   std::lock_guard<std::mutex> lock(mutex_);
   *out_ << "READ " << table << ' ' << key.ToString();
   if (fields) {
@@ -80,6 +81,18 @@ DB::Status BasicDB::Insert(const std::string &table, Slice key,
   for (auto it = values.begin(); it != values.end(); ++it) {
     auto [name, value] = *it;
     *out_ << name.ToString() << '=' << value.ToString() << ' ';
+  }
+  *out_ << ']' << std::endl;
+  return kOK;
+}
+
+DB::Status BasicDB::Load(const std::string &table, Dataset &batch) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  *out_ << "LOAD " << table << " [ ";
+  int n = batch.OpCount();
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    *out_ << item.key.ToString() << ' ';
   }
   *out_ << ']' << std::endl;
   return kOK;

@@ -20,7 +20,6 @@
 #include "core/dataset.h"
 #include "core_workload.h"
 #include "db_factory.h"
-#include "db_writer_proxy.h"
 #include "measurements.h"
 #include "utils/countdown_latch.h"
 #include "utils/rate_limit.h"
@@ -108,40 +107,6 @@ int main(const int argc, const char* argv[]) {
     exit(1);
   }
 
-  std::vector<ycsbc::DB*> dbs;
-  for (int i = 0; i < num_threads; i++) {
-    ycsbc::DB* db = ycsbc::DBFactory::CreateDB(&props, measurements);
-    if (db == nullptr) {
-      std::cerr << "Unknown database name " << props["dbname"] << std::endl;
-      exit(1);
-    }
-    dbs.push_back(db);
-  }
-
-  // Dedicated writer thread setup
-  const bool dedicated_writer =
-      (props.GetProperty("dedicated_writer", "false") == "true");
-  ycsbc::SharedWriteQueue* write_queue = nullptr;
-  ycsbc::DB* writer_db = nullptr;
-  std::future<void> writer_future;
-
-  if (dedicated_writer && !dbs[0]->SupportsMultiThreadWrite() && num_threads > 1) {
-    write_queue = new ycsbc::SharedWriteQueue();
-    writer_db = ycsbc::DBFactory::CreateDB(&props, measurements);
-    if (writer_db == nullptr) {
-      std::cerr << "Failed to create writer DB" << std::endl;
-      exit(1);
-    }
-    // Wrap each per-thread DB in a write proxy
-    for (int i = 0; i < num_threads; i++) {
-      dbs[i] = new ycsbc::DBWriterProxy(dbs[i], write_queue);
-    }
-    // Start the dedicated writer thread
-    writer_future = std::async(std::launch::async, ycsbc::WriterThreadFunc,
-                               writer_db, write_queue);
-    std::cerr << "Dedicated writer thread enabled" << std::endl;
-  }
-
   ycsbc::CoreWorkload wl;
   wl.Init(props);
 
@@ -155,81 +120,41 @@ int main(const int argc, const char* argv[]) {
     const int total_ops =
         stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
 
-    // Compute per-thread op counts up front (needed for pre-generation)
-    std::vector<int> load_thread_ops(num_threads);
-    for (int i = 0; i < num_threads; ++i) {
-      load_thread_ops[i] = total_ops / num_threads;
-      if (i < total_ops % num_threads) load_thread_ops[i]++;
-    }
-
     // Pre-generate all keys and values outside the timed window so the
     // measurement reflects DB cost, not YCSB framework cost (BuildKeyName,
     // BuildValues, RNG, ...).
-    std::vector<std::unique_ptr<ycsbc::Dataset>> load_datasets;
+    ycsbc::Dataset load_dataset(props, wl, 0, true);
     const bool force_generate =
         ycsbc::utils::StrToBool(props.GetProperty("force_generate", "false"));
-    for (int i = 0; i < num_threads; ++i) {
-      load_datasets.emplace_back(new ycsbc::Dataset(props, wl, i, true));
-      struct stat buffer;
-      if (stat(load_datasets.back()->GetFullPath(load_thread_ops[i]).c_str(),
-               &buffer) != 0 ||
-          force_generate) {
-        load_datasets.back()->Generate(load_thread_ops[i]);
-      }
-      //load_datasets.back()->DEBUG(load_thread_ops[i]);
-      load_datasets.back()->Open(load_thread_ops[i]);
+    struct stat buffer;
+    if (stat(load_dataset.GetFullPath(total_ops).c_str(), &buffer) != 0 ||
+        force_generate) {
+      load_dataset.Generate(total_ops);
     }
+    load_dataset.Open(total_ops);
 
-    ycsbc::utils::CountDownLatch latch(num_threads);
     ycsbc::utils::Timer<double> timer;
 
-    // Initialize DB before the timed window
-    for (int i = 0; i < num_threads; ++i) {
-      dbs[i]->Init();
+    // Use a dedicated DB instance for the load phase
+    ycsbc::DB* load_db = ycsbc::DBFactory::CreateDB(&props, measurements);
+    if (load_db == nullptr) {
+      std::cerr << "Unknown database name " << props["dbname"] << std::endl;
+      exit(1);
     }
+    load_db->Init();
+
+    const std::string& table = wl.table_name();
 
     timer.Start();
-    std::future<void> status_future;
-    if (show_status) {
-      status_future = std::async(std::launch::async, StatusThread, measurements,
-                                 &latch, status_interval);
-    }
-    std::vector<std::future<int>> client_threads;
-    for (int i = 0; i < num_threads; ++i) {
-      client_threads.emplace_back(
-          std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                     load_thread_ops[i], &latch, nullptr,
-                     load_datasets[i].get()));
-    }
-    assert((int)client_threads.size() == num_threads);
-
-    int sum = 0;
-    for (auto& n : client_threads) {
-      assert(n.valid());
-      sum += n.get();
-    }
+    load_db->Load(table, load_dataset);
     double runtime = timer.End();
 
-    if (show_status) {
-      status_future.wait();
-    }
-
-    std::cout << measurements->GetStatusMsg() << std::endl;
     std::cout << "Load runtime(sec): " << runtime << std::endl;
-    std::cout << "Load operations(ops): " << sum << std::endl;
-    std::cout << "Load throughput(ops/sec): " << sum / runtime << std::endl;
+    std::cout << "Load operations(ops): " << total_ops << std::endl;
+    std::cout << "Load throughput(ops/sec): " << total_ops / runtime << std::endl;
 
-    // Cleanup after the timed window, only if no transaction phase follows
-    if (!do_transaction) {
-      for (int i = 0; i < num_threads; ++i) {
-        dbs[i]->Cleanup();
-      }
-    }
-  }
-
-  // Drain the write queue between phases
-  if (write_queue) {
-    write_queue->Drain();
+    load_db->Cleanup();
+    delete load_db;
   }
 
   measurements->Reset();
@@ -271,17 +196,25 @@ int main(const int argc, const char* argv[]) {
       txn_datasets.back()->Open(txn_thread_ops[i]);
     }
 
+    // Create fresh DB instances for the transaction phase
+    std::vector<ycsbc::DB*> dbs;
+    for (int i = 0; i < num_threads; i++) {
+      ycsbc::DB* db = ycsbc::DBFactory::CreateDB(&props, measurements);
+      if (db == nullptr) {
+        std::cerr << "Unknown database name " << props["dbname"] << std::endl;
+        exit(1);
+      }
+      dbs.push_back(db);
+    }
+
     ycsbc::utils::CountDownLatch latch(num_threads);
     ycsbc::utils::Timer<double> timer;
 
-    // Initialize DB before the timed window (only if load phase was not run)
-    if (!do_load) {
-      for (int i = 0; i < num_threads; ++i) {
-        dbs[i]->Init();
-      }
+    // Initialize all DB instances before the timed window
+    for (int i = 0; i < num_threads; ++i) {
+      dbs[i]->Init();
     }
 
-    timer.Start();
     std::future<void> status_future;
     if (show_status) {
       status_future = std::async(std::launch::async, StatusThread, measurements,
@@ -289,6 +222,8 @@ int main(const int argc, const char* argv[]) {
     }
     std::vector<std::future<int>> client_threads;
     std::vector<ycsbc::utils::RateLimiter*> rate_limiters;
+    
+    timer.Start();
     for (int i = 0; i < num_threads; ++i) {
       ycsbc::utils::RateLimiter* rlim = nullptr;
       if (ops_limit > 0 || rate_file != "") {
@@ -326,23 +261,11 @@ int main(const int argc, const char* argv[]) {
     std::cout << "Run operations(ops): " << sum << std::endl;
     std::cout << "Run throughput(ops/sec): " << sum / runtime << std::endl;
 
-    // Cleanup after the timed window
+    // Cleanup and delete all DB instances after the timed window
     for (int i = 0; i < num_threads; ++i) {
       dbs[i]->Cleanup();
+      delete dbs[i];
     }
-  }
-
-  // Shut down the dedicated writer thread
-  if (write_queue) {
-    write_queue->Drain();
-    write_queue->RequestStop();
-    writer_future.get();
-    delete writer_db;
-    delete write_queue;
-  }
-
-  for (int i = 0; i < num_threads; i++) {
-    delete dbs[i];
   }
 }
 

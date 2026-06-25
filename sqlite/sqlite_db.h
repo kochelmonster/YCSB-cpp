@@ -11,6 +11,7 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "core/dataset.h"
 #include "core/db.h"
 
 #include <sqlite3.h>
@@ -27,7 +28,8 @@ class SqliteDB : public DB {
   void Cleanup();
 
   Status Read(const std::string &table, Slice key,
-              const std::unordered_set<std::string> *fields, Fields &result) override;
+              const std::unordered_set<std::string> *fields, Fields &result,
+              bool rmw = false) override;
 
   Status Scan(const std::string &table, Slice key, int len,
               const std::unordered_set<std::string> *fields, std::vector<Fields> &result) override;
@@ -38,11 +40,12 @@ class SqliteDB : public DB {
 
   Status Delete(const std::string &table, Slice key) override;
 
+  Status Load(const std::string &table, Dataset &batch) override;
+
   Status BeginTransaction() override;
   Status CommitTransaction() override;
   Status RollbackTransaction() override;
-
-  bool SupportsMultiThreadWrite() const override { return false; }
+  void FlushPending() override;
 
  private:
   void OpenDB();

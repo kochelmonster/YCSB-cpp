@@ -27,7 +27,7 @@ class AerospikeDB : public DB {
   
   Status Read(const std::string &table, Slice key,
               const std::unordered_set<std::string> *fields,
-              Fields &result) override;
+              Fields &result, bool rmw = false) override;
              
   Status Scan(const std::string &table, Slice key, int record_count,
               const std::unordered_set<std::string> *fields,

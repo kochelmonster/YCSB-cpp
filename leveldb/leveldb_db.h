@@ -15,6 +15,7 @@
 #include <cstring>
 #include <endian.h>
 
+#include "core/dataset.h"
 #include "core/db.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
@@ -30,16 +31,24 @@ namespace ycsbc {
 
 class LeveldbDB : public DB {
  public:
-  LeveldbDB() : sync_(false), batch_size_(1), pending_(0) {}
+  LeveldbDB() : sync_(false), txn_active_(false) {}
   ~LeveldbDB() {}
 
   void Init();
 
   void Cleanup();
 
+  Status BeginTransaction() override;
+  Status CommitTransaction() override;
+  Status RollbackTransaction() override;
+  void FlushPending() override;
+
+  Status Load(const std::string &table, Dataset &batch) override;
+
   Status Read(const std::string &table, Slice key,
-               const std::unordered_set<std::string> *fields, Fields &result) override {
-    return (this->*(method_read_))(table, key, fields, result);
+               const std::unordered_set<std::string> *fields, Fields &result,
+               bool rmw = false) override {
+    return (this->*(method_read_))(table, key, fields, result, rmw);
   }
 
   Status Scan(const std::string &table, Slice key, int len,
@@ -74,7 +83,8 @@ class LeveldbDB : public DB {
   std::string FieldFromCompKey(const std::string &comp_key);
 
   Status ReadSingleEntry(const std::string &table, Slice key,
-                         const std::unordered_set<std::string> *fields, Fields &result);
+                         const std::unordered_set<std::string> *fields, Fields &result,
+                         bool rmw = false);
   Status ScanSingleEntry(const std::string &table, Slice key, int len,
                          const std::unordered_set<std::string> *fields,
                          std::vector<Fields> &result);
@@ -85,12 +95,14 @@ class LeveldbDB : public DB {
   Status DeleteSingleEntry(const std::string &table, Slice key);
 
   Status ReadCompKeyRM(const std::string &table, Slice key,
-                       const std::unordered_set<std::string> *fields, Fields &result);
+                       const std::unordered_set<std::string> *fields, Fields &result,
+                       bool rmw = false);
   Status ScanCompKeyRM(const std::string &table, Slice key, int len,
                        const std::unordered_set<std::string> *fields,
                        std::vector<Fields> &result);
   Status ReadCompKeyCM(const std::string &table, Slice key,
-                       const std::unordered_set<std::string> *fields, Fields &result);
+                       const std::unordered_set<std::string> *fields, Fields &result,
+                       bool rmw = false);
   Status ScanCompKeyCM(const std::string &table, Slice key, int len,
                        const std::unordered_set<std::string> *fields,
                        std::vector<Fields> &result);
@@ -99,7 +111,8 @@ class LeveldbDB : public DB {
   Status DeleteCompKey(const std::string &table, Slice key);
 
   Status (LeveldbDB::*method_read_)(const std::string &, Slice,
-                                    const std::unordered_set<std::string> *, Fields &);
+                                    const std::unordered_set<std::string> *, Fields &,
+                                    bool);
   Status (LeveldbDB::*method_scan_)(const std::string &, Slice, int,
                                     const std::unordered_set<std::string> *,
                                     std::vector<Fields> &);
@@ -113,22 +126,15 @@ class LeveldbDB : public DB {
   std::string field_prefix_;
 
   bool sync_;
-  int batch_size_;
-  int pending_;
+  bool txn_active_;
   leveldb::WriteBatch write_batch_;
 
-  void FlushBatch() {
-    if (pending_ > 0) {
-      leveldb::WriteOptions wopt;
-      wopt.sync = sync_;
-      leveldb::Status s = db_->Write(wopt, &write_batch_);
-      if (!s.ok()) throw utils::Exception(std::string("LevelDB Write: ") + s.ToString());
-      write_batch_.Clear();
-      pending_ = 0;
-    }
-  }
-  void CommitMutation() {
-    if (++pending_ >= batch_size_) FlushBatch();
+  void FlushWriteBatch() {
+    leveldb::WriteOptions wopt;
+    wopt.sync = sync_;
+    leveldb::Status s = db_->Write(wopt, &write_batch_);
+    if (!s.ok()) throw utils::Exception(std::string("LevelDB Write: ") + s.ToString());
+    write_batch_.Clear();
   }
 
   static leveldb::DB *db_;
@@ -141,4 +147,3 @@ DB *NewLeveldbDB();
 } // ycsbc
 
 #endif // YCSB_C_LEVELDB_DB_H_
-

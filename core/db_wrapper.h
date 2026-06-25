@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "db.h"
+#include "dataset.h"
 #include "measurements.h"
 #include "utils/timer.h"
 #include "utils/utils.h"
@@ -30,24 +31,57 @@ class DBWrapper : public DB {
   void Cleanup() {
     db_->Cleanup();
   }
+  void FlushPending() {
+    db_->FlushPending();
+  }
   Status BeginTransaction() {
-    return db_->BeginTransaction();
+    timer_.Start();
+    Status s = db_->BeginTransaction();
+    uint64_t elapsed = timer_.End();
+    measurements_->Report(BEGIN_TXN, elapsed);
+    return s;
   }
   Status CommitTransaction() {
-    return db_->CommitTransaction();
+    timer_.Start();
+    Status s = db_->CommitTransaction();
+    uint64_t elapsed = timer_.End();
+    measurements_->Report(COMMIT_TXN, elapsed);
+    return s;
   }
   Status RollbackTransaction() {
-    return db_->RollbackTransaction();
+    timer_.Start();
+    Status s = db_->RollbackTransaction();
+    uint64_t elapsed = timer_.End();
+    measurements_->Report(ROLLBACK_TXN, elapsed);
+    return s;
+  }
+  Status Load(const std::string &table, Dataset &batch) {
+    // No per-op measurement; the caller measures the full load phase externally.
+    return db_->Load(table, batch);
   }
   Status Read(const std::string &table, Slice key,
-              const std::unordered_set<std::string> *fields, Fields &result) {
+              const std::unordered_set<std::string> *fields, Fields &result,
+              bool rmw = false) {
     timer_.Start();
-    Status s = db_->Read(table, key, fields, result);
+    Status s = db_->Read(table, key, fields, result, rmw);
     uint64_t elapsed = timer_.End();
-    if (s == kOK) {
-      measurements_->Report(READ, elapsed);
+    if (s == kSkip) {
+      // Adapter indicated the read was unnecessary (e.g. RMW when
+      // Update will re-read anyway). Do not measure the wasted time.
+      return s;
+    }
+    if (rmw) {
+      if (s == kOK) {
+        measurements_->Report(READMODIFYWRITE, elapsed);
+      } else {
+        measurements_->Report(READMODIFYWRITE_FAILED, elapsed);
+      }
     } else {
-      measurements_->Report(READ_FAILED, elapsed);
+      if (s == kOK) {
+        measurements_->Report(READ, elapsed);
+      } else {
+        measurements_->Report(READ_FAILED, elapsed);
+      }
     }
     return s;
   }
@@ -95,9 +129,6 @@ class DBWrapper : public DB {
       measurements_->Report(DELETE_FAILED, elapsed);
     }
     return s;
-  }
-  bool SupportsMultiThreadWrite() const override {
-    return db_->SupportsMultiThreadWrite();
   }
  private:
   DB *db_;

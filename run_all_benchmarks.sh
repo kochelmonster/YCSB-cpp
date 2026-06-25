@@ -26,6 +26,10 @@ LOAD_BATCH_SIZE="${LOAD_BATCH_SIZE:-64}"
 BENCHMARK_REPEATS="${BENCHMARK_REPEATS:-1}"
 export YCSB_SEED=12345
 
+# Memory limit for each ycsb process (passed to systemd-run --scope as MemoryMax/MemorySwapMax).
+# Swap is prohibited by setting MemorySwapMax equal to MemoryMax.
+YCSB_MEMORY_LIMIT="${YCSB_MEMORY_LIMIT:-20G}"
+
 DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite" "redis" "badger")
 if [ -n "${BENCHMARK_DATABASES:-}" ]; then
     read -r -a DATABASES <<< "$BENCHMARK_DATABASES"
@@ -42,6 +46,7 @@ BASE_WORKLOADS=(
     "workload_kv_rmw"
 )
 
+
 SCENARIOS=(
     "baseline"
     "batch_insert_1"
@@ -54,6 +59,7 @@ SCENARIOS=(
     "batch_update_64"
     "acid_aci"
     "acid_txn"
+    "acid_batch_rmw"
     "concurrent_write"
     "concurrent_session"
     "value_size_100"
@@ -92,23 +98,14 @@ ENTRY_RUN_FILE=()
 ENTRY_RUN_MEDIAN_TP=()
 ENTRY_RUN_ALL_TPS=()  # space-separated list of per-repeat throughputs
 
-supports_batch_size() {
-    local db=$1
-    case "$db" in
-        leaves|lmdb|leveldb|rocksdb)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
 scenario_batch_size() {
     local scenario=$1
     case "$scenario" in
         batch_insert_*|batch_update_*)
             echo "${scenario##*_}"
+            ;;
+        acid_batch_rmw)
+            echo "8"
             ;;
         *)
             echo "1"
@@ -140,6 +137,9 @@ scenario_workloads() {
         acid_txn)
             echo "workload_kv_acid_txn"
             ;;
+        acid_batch_rmw)
+            echo "workload_kv_acid_batch_rmw"
+            ;;
     concurrent_write)
         echo "workload_kv_concurrent_write"
         ;;
@@ -160,7 +160,7 @@ supports_scenario() {
     local scenario=$2
 
     case "$scenario" in
-        acid_txn|acid_aci)
+        acid_txn|acid_aci|acid_batch_rmw)
             [ "$db" = "wiredtiger" ] || [ "$db" = "lmdb" ] || [ "$db" = "leaves" ] || [ "$db" = "sqlite" ] || [ "$db" = "badger" ]
             return
             ;;
@@ -178,10 +178,14 @@ db_mode_args() {
     local db=$1
     local scenario=$2
 
-    if [ "$MATRIX_MODE" = "durability" ] || [ "$scenario" = "acid_aci" ] || [ "$scenario" = "acid_txn" ]; then
+    if [ "$MATRIX_MODE" = "durability" ] || [ "$scenario" = "acid_aci" ] || [ "$scenario" = "acid_txn" ] || [ "$scenario" = "acid_batch_rmw" ]; then
         case "$db" in
             leaves)
-                echo "-p leaves.wal=true"
+                if [ "$(scenario_batch_size "$scenario")" -eq 1 ]; then
+                    echo "-p leaves.sync=true -p leaves.wal=false"
+                else
+                    echo "-p leaves.wal=false -p leaves.sync=true"
+                fi
                 ;;
             leveldb)
                 echo "-p leveldb.sync=true"
@@ -190,7 +194,7 @@ db_mode_args() {
                 echo "-p rocksdb.sync=true"
                 ;;
             lmdb)
-                echo "-p lmdb.nosync=false -p lmdb.nometasync=false -p lmdb.mapasync=false"
+                echo "-p lmdb.nosync=false -p lmdb.nometasync=false -p lmdb.mapasync=false -p lmdb.writemap=true"
                 ;;
             wiredtiger)
                 echo "-p wiredtiger.log.enabled=true -p wiredtiger.transaction_sync.enabled=true -p wiredtiger.transaction_sync.method=fsync"
@@ -237,16 +241,10 @@ scenario_db_args() {
     batch_size=$(scenario_batch_size "$scenario")
     fieldlength=$(scenario_fieldlength "$scenario")
 
-    if [ "$phase" = "load" ] && supports_batch_size "$db"; then
+    if [ "$phase" = "load" ]; then
         batch_size="$LOAD_BATCH_SIZE"
     fi
-
     if ! supports_scenario "$db" "$scenario"; then
-        echo ""
-        return 2
-    fi
-
-    if [[ "$scenario" == batch_* ]] && ! supports_batch_size "$db"; then
         echo ""
         return 2
     fi
@@ -261,23 +259,20 @@ scenario_db_args() {
         dw_args="-p dedicated_writer=true"
     fi
 
+    local bs_args=""
+    if [[ "$scenario" != concurrent_* ]]; then
+        bs_args="-p batch_size=${batch_size}"
+    fi
     case "$db" in
-        leaves|leveldb|rocksdb|lmdb)
-            local bs_args=""
-            if [[ "$scenario" != concurrent_* ]]; then
-                bs_args="-p ${db}.batch_size=${batch_size}"
-            fi
-            echo "${bs_args} ${fl_args} ${dw_args}"
-            ;;
         redis|dragonfly)
             if [ "$phase" = "load" ]; then
-                echo "-p redis.destroy=true"
+                echo "${bs_args} -p redis.destroy=true"
             else
-                echo "-p redis.destroy=false ${dw_args}"
+                echo "${bs_args} -p redis.destroy=false ${dw_args}"
             fi
             ;;
         *)
-            echo "${fl_args} ${dw_args}"
+            echo "${bs_args} ${fl_args} ${dw_args}"
             ;;
     esac
 
@@ -355,6 +350,14 @@ append_db_size() {
 
 LAST_OUTPUT_FILE=""
 
+memory_limit_wrapper() {
+    if [ -n "${YCSB_MEMORY_LIMIT:-}" ]; then
+        echo "systemd-run --user --scope -p MemoryMax=${YCSB_MEMORY_LIMIT} -p MemorySwapMax=${YCSB_MEMORY_LIMIT} --"
+    else
+        echo ""
+    fi
+}
+
 run_benchmark() {
     local db=$1
     local scenario=$2
@@ -387,7 +390,15 @@ run_benchmark() {
 
     echo "Running $phase phase for $db with $workload (scenario=$scenario)..."
 
-    cmd=("$YCSB_BIN" "-$phase" "-db" "$db" "-P" "$properties_file" "-P" "$WORKLOADS_DIR/$workload")
+    local ml_wrapper
+    ml_wrapper=$(memory_limit_wrapper)
+    if [ -n "$ml_wrapper" ]; then
+        cmd=()
+        read -r -a cmd <<< "$ml_wrapper"
+        cmd+=("$YCSB_BIN" "-$phase" "-db" "$db" "-P" "$properties_file" "-P" "$WORKLOADS_DIR/$workload")
+    else
+        cmd=("$YCSB_BIN" "-$phase" "-db" "$db" "-P" "$properties_file" "-P" "$WORKLOADS_DIR/$workload")
+    fi
     if [ ${#COMMON_ARGS[@]} -gt 0 ]; then
         cmd+=("${COMMON_ARGS[@]}")
     fi
@@ -532,17 +543,23 @@ for db in "${DATABASES[@]}"; do
                     fi
                 fi
 
-                # Clean database, load, then run (load log is discarded)
-                if ! run_benchmark "$db" "$scenario" "$workload" "load"; then
-                    echo "WARNING: load phase failed for $db $scenario $workload"
-                    continue 2
-                fi
+            # First check if scenario is supported
+            if ! supports_scenario "$db" "$scenario"; then
+                echo "Skipping unsupported scenario '${scenario}' for db '${db}' (both load and run phases)"
+                continue
+            fi
 
-                repeat_suffix="_r${r}"
-                if ! run_benchmark "$db" "$scenario" "$workload" "run" "$repeat_suffix"; then
-                    echo "WARNING: run phase failed for $db $scenario $workload (repeat $r)"
-                    continue 2
-                fi
+            # Clean database, load, then run (load log is discarded)
+            if ! run_benchmark "$db" "$scenario" "$workload" "load"; then
+                echo "WARNING: load phase failed for $db $scenario $workload"
+                continue 2
+            fi
+
+            repeat_suffix="_r${r}"
+            if ! run_benchmark "$db" "$scenario" "$workload" "run" "$repeat_suffix"; then
+                echo "WARNING: run phase failed for $db $scenario $workload (repeat $r)"
+                continue 2
+            fi
                 last_run_file="$LAST_OUTPUT_FILE"
                 tp=$(extract_phase_throughput "$last_run_file" "Run")
                 [ -n "$tp" ] && run_tputs+=("$tp")
@@ -585,3 +602,4 @@ echo "ls -la $RESULTS_DIR"
 echo ""
 echo "To view summary:"
 echo "cat $RESULTS_DIR/benchmark_summary_${TIMESTAMP}.txt"
+paplay /usr/share/sounds/freedesktop/stereo/complete.oga
