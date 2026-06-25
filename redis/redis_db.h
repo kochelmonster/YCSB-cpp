@@ -29,7 +29,8 @@ class RedisDB : public DB {
   void FlushPending() override;
 
   Status Read(const std::string &table, Slice key,
-               const std::unordered_set<std::string> *fields, Fields &result) override;
+               const std::unordered_set<std::string> *fields, Fields &result,
+               bool rmw = false) override;
 
   Status Scan(const std::string &table, Slice key, int len,
                const std::unordered_set<std::string> *fields, std::vector<Fields> &result) override;

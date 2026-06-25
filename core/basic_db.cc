@@ -29,7 +29,8 @@ void BasicDB::Init() {
 }
 
 DB::Status BasicDB::Read(const std::string &table, Slice key,
-                         const std::unordered_set<std::string> *fields, Fields &result) {
+                         const std::unordered_set<std::string> *fields, Fields &result,
+                         bool rmw) {
   std::lock_guard<std::mutex> lock(mutex_);
   *out_ << "READ " << table << ' ' << key.ToString();
   if (fields) {

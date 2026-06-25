@@ -214,7 +214,8 @@ DB::Status RedisDB::Load(const std::string &table, Dataset &batch) {
 }
 
 DB::Status RedisDB::Read(const std::string &table, Slice key,
-                         const std::unordered_set<std::string> *fields, Fields &result) {
+                         const std::unordered_set<std::string> *fields, Fields &result,
+                         bool /*rmw*/) {
   return ReadHashFields(BuildRedisKey(table, key), fields, result);
 }
 

@@ -230,7 +230,10 @@ std::string LeveldbDB::FieldFromCompKey(const std::string &comp_key) {
 
 DB::Status LeveldbDB::ReadSingleEntry(const std::string &table, Slice key,
                                       const std::unordered_set<std::string> *fields,
-                                      Fields &result) {
+                                      Fields &result, bool rmw) {
+  // When rmw is true, UpdateSingleEntry() will re-read and merge internally.
+  if (rmw) return kSkip;
+
   // Read directly from the DB (LevelDB WriteBatch does not support reads).
   std::string data;
   leveldb::Status s = db_->Get(leveldb::ReadOptions(), leveldb::Slice(key.data(), key.size()), &data);
@@ -301,7 +304,10 @@ DB::Status LeveldbDB::DeleteSingleEntry(const std::string &table, Slice key) {
 
 DB::Status LeveldbDB::ReadCompKeyRM(const std::string &table, Slice key,
                                     const std::unordered_set<std::string> *fields,
-                                    Fields &result) {
+                                    Fields &result, bool rmw) {
+  // When rmw is true, Update() will re-read and merge internally, so skip.
+  if (rmw) return kSkip;
+
   leveldb::Iterator *db_iter = db_->NewIterator(leveldb::ReadOptions());
   db_iter->Seek(leveldb::Slice(key.data(), key.size()));
   if (!db_iter->Valid() || KeyFromCompKey(db_iter->key().ToString()) != key.ToString()) {
@@ -383,7 +389,7 @@ DB::Status LeveldbDB::ScanCompKeyRM(const std::string &table, Slice key, int len
 
 DB::Status LeveldbDB::ReadCompKeyCM(const std::string &table, Slice key,
                                       const std::unordered_set<std::string> *fields,
-                                      Fields &result) {
+                                      Fields &result, bool /*rmw*/) {
   return kNotImplemented;
 }
 

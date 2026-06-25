@@ -40,8 +40,9 @@ class RocksdbDB : public DB {
   void FlushPending() override;
 
   Status Read(const std::string &table, Slice key,
-               const std::unordered_set<std::string> *fields, Fields &result) override {
-    return (this->*(method_read_))(table, key, fields, result);
+               const std::unordered_set<std::string> *fields, Fields &result,
+               bool rmw = false) override {
+    return (this->*(method_read_))(table, key, fields, result, rmw);
   }
 
   Status Scan(const std::string &table, Slice key, int len,
@@ -74,7 +75,8 @@ class RocksdbDB : public DB {
                   std::vector<rocksdb::ColumnFamilyDescriptor> *cf_descs);
 
   Status ReadSingle(const std::string &table, Slice key,
-                    const std::unordered_set<std::string> *fields, Fields &result);
+                    const std::unordered_set<std::string> *fields, Fields &result,
+                    bool rmw = false);
   Status ScanSingle(const std::string &table, Slice key, int len,
                     const std::unordered_set<std::string> *fields,
                     std::vector<Fields> &result);
@@ -87,7 +89,8 @@ class RocksdbDB : public DB {
   Status DeleteSingle(const std::string &table, Slice key);
 
   Status (RocksdbDB::*method_read_)(const std::string &, Slice,
-                                    const std::unordered_set<std::string> *, Fields &);
+                                    const std::unordered_set<std::string> *, Fields &,
+                                    bool);
   Status (RocksdbDB::*method_scan_)(const std::string &, Slice,
                                     int, const std::unordered_set<std::string> *,
                                     std::vector<Fields> &);

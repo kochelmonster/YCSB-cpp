@@ -22,7 +22,8 @@ class NullDB : public DB {
   void Cleanup() override {}
 
   Status Read(const std::string &table, Slice key,
-              const std::unordered_set<std::string> *fields, Fields &result) override {
+              const std::unordered_set<std::string> *fields, Fields &result,
+              bool rmw = false) override {
     return kOK;
   }
 

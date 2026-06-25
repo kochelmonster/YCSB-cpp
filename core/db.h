@@ -34,7 +34,8 @@ class DB {
     kOK = 0,
     kError,
     kNotFound,
-    kNotImplemented
+    kNotImplemented,
+    kSkip       // Operation intentionally skipped (e.g., Read in RMW when Update reads anyway)
   };
   ///
   /// Initializes any state for accessing this DB.
@@ -74,7 +75,7 @@ class DB {
   ///
   virtual Status Read(const std::string &table, Slice key,
                    const std::unordered_set<std::string> *fields,
-                   Fields &result) = 0;
+                   Fields &result, bool rmw = false) = 0;
   ///
   /// Performs a range scan for a set of records in the database.
   /// Field/value pairs from the result are stored in a vector of Fields objects.

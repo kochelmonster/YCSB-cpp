@@ -400,7 +400,10 @@ DB::Status RocksdbDB::Load(const std::string &table, Dataset &batch) {
 
 DB::Status RocksdbDB::ReadSingle(const std::string &table, Slice key,
                                   const std::unordered_set<std::string> *fields,
-                                  Fields &result) {
+                                  Fields &result, bool rmw) {
+  // When rmw is true, UpdateSingle() will re-read and merge internally.
+  if (rmw) return kSkip;
+
   std::string data;
   rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), rocksdb::Slice(key.data(), key.size()), &data);
   if (s.IsNotFound()) {

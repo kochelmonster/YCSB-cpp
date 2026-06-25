@@ -326,7 +326,10 @@ DB::Status WTDB::RollbackTransaction() {
 
 DB::Status WTDB::ReadSingleEntry(const std::string& table, Slice key,
                                  const std::unordered_set<std::string>* fields,
-                                 Fields& result) {
+                                 Fields& result, bool rmw) {
+  // When rmw is true, UpdateSingleEntry() will re-read and merge internally.
+  if (rmw) return kSkip;
+
   WT_ITEM k = {key.data(), key.size()};
   WT_ITEM v;
   int ret;

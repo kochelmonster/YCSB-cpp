@@ -60,14 +60,28 @@ class DBWrapper : public DB {
     return db_->Load(table, batch);
   }
   Status Read(const std::string &table, Slice key,
-              const std::unordered_set<std::string> *fields, Fields &result) {
+              const std::unordered_set<std::string> *fields, Fields &result,
+              bool rmw = false) {
     timer_.Start();
-    Status s = db_->Read(table, key, fields, result);
+    Status s = db_->Read(table, key, fields, result, rmw);
     uint64_t elapsed = timer_.End();
-    if (s == kOK) {
-      measurements_->Report(READ, elapsed);
+    if (s == kSkip) {
+      // Adapter indicated the read was unnecessary (e.g. RMW when
+      // Update will re-read anyway). Do not measure the wasted time.
+      return s;
+    }
+    if (rmw) {
+      if (s == kOK) {
+        measurements_->Report(READMODIFYWRITE, elapsed);
+      } else {
+        measurements_->Report(READMODIFYWRITE_FAILED, elapsed);
+      }
     } else {
-      measurements_->Report(READ_FAILED, elapsed);
+      if (s == kOK) {
+        measurements_->Report(READ, elapsed);
+      } else {
+        measurements_->Report(READ_FAILED, elapsed);
+      }
     }
     return s;
   }

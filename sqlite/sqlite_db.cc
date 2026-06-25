@@ -249,7 +249,8 @@ DB::Status SqliteDB::Load(const std::string &table, Dataset &batch) {
 }
 
 DB::Status SqliteDB::Read(const std::string &table, Slice key,
-                          const std::unordered_set<std::string> *fields, Fields &result) {
+                          const std::unordered_set<std::string> *fields, Fields &result,
+                          bool /*rmw*/) {
   DB::Status s = kOK;
   bool temp = false;
   sqlite3_stmt *stmt;

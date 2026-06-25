@@ -386,9 +386,9 @@ DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
   if (!read_all_fields()) {
     tl_fields_buffer.clear();
     tl_fields_buffer.insert(NextFieldName());
-    db.Read(table_name_, tl_key_buffer, &tl_fields_buffer, tl_result_buffer);
+    db.Read(table_name_, tl_key_buffer, &tl_fields_buffer, tl_result_buffer, true);
   } else {
-    db.Read(table_name_, tl_key_buffer, NULL, tl_result_buffer);
+    db.Read(table_name_, tl_key_buffer, NULL, tl_result_buffer, true);
   }
 
   tl_values_buffer.clear();
@@ -492,7 +492,8 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
     uint32_t op_specific_data_len = 0;
     switch (item.type) {
       case WorkItem::OpType::INSERT:
-      case WorkItem::OpType::UPDATE: {
+      case WorkItem::OpType::UPDATE:
+      case WorkItem::OpType::READMODIFYWRITE: {
         const std::string& buffer = item.values.buffer();
         op_specific_data_len += sizeof(uint32_t) + buffer.size();
         break;
@@ -521,7 +522,8 @@ void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading)
 
     switch (item.type) {
       case WorkItem::OpType::INSERT:
-      case WorkItem::OpType::UPDATE: {
+      case WorkItem::OpType::UPDATE:
+      case WorkItem::OpType::READMODIFYWRITE: {
         const std::string& buffer = item.values.buffer();
         uint32_t fields_size = buffer.size();
         ofs.write(reinterpret_cast<const char*>(&fields_size), sizeof(fields_size));

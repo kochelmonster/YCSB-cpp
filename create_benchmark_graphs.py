@@ -6,7 +6,7 @@ Charts produced:
   batch_insert_scaling.png         — line chart: throughput vs insert batch size
   batch_update_scaling.png         — line chart: throughput vs update batch size
   value_size_scaling.png           — line chart: throughput vs value size
-  acid_workload_comparison.png     — ACID workloads, best across scenarios
+  acid_workload_comparison.png     — ACID workloads (A/C/I, Txn, Batch RMW), best across scenarios
   concurrent_workload_comparison.png — concurrent workloads, grouped bars
 
 All charts are normalized to a reference database (LevelDB if present,
@@ -39,11 +39,12 @@ WORKLOAD_LABELS = {
     "workload_kv_batch_update": "Batch Update",
     "workload_kv_acid_aci": "ACID A/C/I",
     "workload_kv_acid_txn": "ACID Txn",
+    "workload_kv_acid_batch_rmw": "ACID Batch RMW",
     "workload_kv_concurrent_write": "Concurrent Write (8T)",
     "workload_kv_concurrent_session": "Concurrent Session (8T)",
 }
 
-ACID_WORKLOAD_LABELS = {"ACID A/C/I", "ACID Txn"}
+ACID_WORKLOAD_LABELS = {"ACID A/C/I", "ACID Txn", "ACID Batch RMW"}
 CONCURRENT_WORKLOAD_LABELS = {"Concurrent Write (8T)", "Concurrent Session (8T)"}
 
 DATABASE_ORDER = ["leaves", "lmdb", "leveldb", "rocksdb", "wiredtiger", "sqlite", "redis", "badger", "dragonfly"]

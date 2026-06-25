@@ -176,7 +176,11 @@ DB::Status BadgerDB::Load(const std::string &table, Dataset &batch) {
 }
 
 DB::Status BadgerDB::Read(const std::string &table, Slice key,
-                          const std::unordered_set<std::string> *fields, Fields &result) {
+                          const std::unordered_set<std::string> *fields, Fields &result,
+                          bool rmw) {
+  // When rmw is true, Update() will re-read and merge internally, so skip.
+  if (rmw) return kSkip;
+
   // Reads always go directly to the DB (badger_batch_set doesn't support reading
   // uncommitted data, and writes within a batch are still visible via normal reads
   // since Badger's internal transactions are per-operation).

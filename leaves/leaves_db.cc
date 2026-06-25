@@ -57,6 +57,8 @@ void LeavesDB::Init() {
 
   fieldcount_ = std::stoi(props.GetProperty(CoreWorkload::FIELD_COUNT_PROPERTY,
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
+  batch_size_ = std::stoull(props.GetProperty(
+      CoreWorkload::BATCH_SIZE_PROPERTY, CoreWorkload::BATCH_SIZE_DEFAULT));
 
   sync_ = props.GetProperty(PROP_SYNC, PROP_SYNC_DEFAULT) == "true";
   wal_enabled_ = props.GetProperty(PROP_WAL, PROP_WAL_DEFAULT) == "true";
@@ -175,9 +177,10 @@ DB::Status LeavesDB::BeginTransaction() {
   FlushPending();
   if (format_ == kConfluence) {
     confluence_cursor_.start_transaction();
-  } else {
-    cursor_.start_transaction(false, wal_enabled_);
+  } else if (batch_size_ > 1 || wal_enabled_) {
+    cursor_.start_transaction(true, wal_enabled_);
   }
+
   txn_active_ = true;
   return kOK;
 }
@@ -206,7 +209,10 @@ DB::Status LeavesDB::RollbackTransaction() {
 
 DB::Status LeavesDB::Read(const std::string& /*table*/, Slice key,
                           const std::unordered_set<std::string>* fields,
-                          Fields& result) {
+                          Fields& result, bool rmw) {
+  // When rmw is true, Update() will re-read and merge internally, so skip.
+  if (rmw) return kSkip;
+
   try {
     leaves::Slice key_slice(key.data(), key.size());
 
@@ -218,11 +224,11 @@ DB::Status LeavesDB::Read(const std::string& /*table*/, Slice key,
       }
       value_slice = confluence_cursor_.value();
     } else {
+      cursor_.update();
       cursor_.find(key_slice);
 
       if (!cursor_.is_valid()) {
         // Refresh cursor to see latest committed data and retry
-        cursor_.update();
         cursor_.find(key_slice);
         if (!cursor_.is_valid()) {
           return kNotFound;
@@ -388,20 +394,24 @@ DB::Status LeavesDB::Delete(const std::string& /*table*/, Slice key) {
   }
 }
 
-DB::Status LeavesDB::Load(const std::string& /*table*/, Dataset &batch) {
+DB::Status LeavesDB::Load(const std::string& /*table*/, Dataset& batch) {
   try {
     // Use single cursor transaction for efficient bulk loading.
-    cursor_.start_transaction(false, wal_enabled_);
+    if (format_ == kConfluence) {
+      cursor_ = confluence_db_->_internal_main().cursor();
+    }
+
+    cursor_.start_transaction();
     int n = batch.OpCount();
     for (int i = 0; i < n; ++i) {
-      const auto &item = batch.Next();
+      const auto& item = batch.Next();
       leaves::Slice key_slice(item.key.data(), item.key.size());
-      const auto &data = item.values.data();
+      const auto& data = item.values.data();
       leaves::Slice value_slice(data.data(), data.size());
       cursor_.find(key_slice);
       cursor_.value(value_slice);
     }
-    cursor_.commit(sync_);
+    cursor_.commit();
     return kOK;
   } catch (const std::exception& e) {
     std::cerr << "Leaves Load error: " << e.what() << std::endl;

@@ -37,7 +37,8 @@ class LeavesDB : public DB {
   void Cleanup();
 
   Status Read(const std::string& table, Slice key,
-              const std::unordered_set<std::string>* fields, Fields& result) override;
+              const std::unordered_set<std::string>* fields, Fields& result,
+              bool rmw = false) override;
 
   Status Scan(const std::string& table, Slice key, int len,
               const std::unordered_set<std::string>* fields,
@@ -78,6 +79,7 @@ class LeavesDB : public DB {
 
   int fieldcount_;
   std::string dbpath_;
+  size_t batch_size_;
   size_t mapsize_;
   SingleCursor cursor_;
   leaves::MapConfluenceCursor confluence_cursor_;

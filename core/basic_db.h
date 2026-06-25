@@ -26,7 +26,8 @@ class BasicDB : public DB {
   void Init();
 
   Status Read(const std::string &table, Slice key,
-              const std::unordered_set<std::string> *fields, Fields &result);
+              const std::unordered_set<std::string> *fields, Fields &result,
+              bool rmw = false);
 
   Status Scan(const std::string &table, Slice key, int len,
               const std::unordered_set<std::string> *fields, std::vector<Fields> &result);
