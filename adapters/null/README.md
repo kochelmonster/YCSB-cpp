@@ -16,10 +16,10 @@ The null database does nothing - all operations immediately return success witho
 
 ```bash
 # Load phase
-./build/ycsb -load -db null -threads 1 -P null/null.properties -P workloads/workloada -p recordcount=100000
+./build/ycsb -load -db null -threads 1 -P adapters/null/null.properties -P workloads/workloada -p recordcount=100000
 
 # Run phase
-./build/ycsb -run -db null -threads 1 -P null/null.properties -P workloads/workloada -p recordcount=100000 -p operationcount=100000
+./build/ycsb -run -db null -threads 1 -P adapters/null/null.properties -P workloads/workloada -p recordcount=100000 -p operationcount=100000
 ```
 
 ## Performance Results

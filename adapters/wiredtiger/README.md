@@ -1,9 +1,9 @@
 # WiredTiger
 
-The code in `wiredtiger_db.cc` assumes your libwiredtiger to have built-in `<compressor>` that you specify in the
-`wiredtiger.properties`.
+The code in `adapters/wiredtiger/wiredtiger_db.cc` assumes your libwiredtiger to have built-in `<compressor>` that you specify in
+`adapters/wiredtiger/wiredtiger.properties`.
 
-For example, if you specify `wiredtiger.blk_mgr.compressor=snappy` in `wiredtiger.properties`, your libwiredtiger
+For example, if you specify `wiredtiger.blk_mgr.compressor=snappy` in `adapters/wiredtiger/wiredtiger.properties`, your libwiredtiger
 should be built with `DHAVE_BUILTIN_EXTENSION_SNAPPY=1`.
 
 ## Install WiredTiger library on POSIX

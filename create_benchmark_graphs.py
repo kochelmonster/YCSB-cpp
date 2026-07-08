@@ -139,6 +139,19 @@ def prepare_matrix(csv_path: Path) -> pd.DataFrame:
     return frame
 
 
+def trimmed_mean(values: pd.Series) -> float:
+    """Return the mean after dropping the smallest and largest values when possible."""
+    cleaned = pd.to_numeric(values, errors="coerce").dropna()
+    if cleaned.empty:
+        return 0.0
+    if len(cleaned) <= 2:
+        return float(cleaned.mean())
+    trimmed = cleaned.sort_values().iloc[1:-1]
+    if trimmed.empty:
+        return float(cleaned.mean())
+    return float(trimmed.mean())
+
+
 def save_pivot_csv(pivot: pd.DataFrame, output_path: Path) -> None:
     """Save a pivot DataFrame as a CSV file alongside the graph."""
     csv_path = output_path.with_suffix(".csv")
@@ -322,7 +335,7 @@ def main() -> None:
             index="workload_label",
             columns="database",
             values="run_throughput_ops_sec",
-            aggfunc="max",
+            aggfunc=trimmed_mean,
             fill_value=0,
         )
         ref_db = choose_reference_db(base_run_pivot)
@@ -354,7 +367,7 @@ def main() -> None:
                 index="batch_size",
                 columns="database",
                 values="run_throughput_ops_sec",
-                aggfunc="max",
+                aggfunc=trimmed_mean,
                 fill_value=0,
             )
             # Sort by batch size ascending
@@ -383,7 +396,7 @@ def main() -> None:
             index="value_size",
             columns="database",
             values="run_throughput_ops_sec",
-            aggfunc="max",
+            aggfunc=trimmed_mean,
             fill_value=0,
         )
         value_pivot = value_pivot.sort_index()

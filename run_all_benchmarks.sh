@@ -352,10 +352,16 @@ LAST_OUTPUT_FILE=""
 
 memory_limit_wrapper() {
     if [ -n "${YCSB_MEMORY_LIMIT:-}" ]; then
-        echo "systemd-run --user --scope -p MemoryMax=${YCSB_MEMORY_LIMIT} -p MemorySwapMax=${YCSB_MEMORY_LIMIT} --"
+        echo "systemd-run --user --scope -p MemoryMax=${YCSB_MEMORY_LIMIT} -p MemorySwapMax=0 --"
     else
         echo ""
     fi
+}
+
+reset_swap() {
+    echo "Resetting swap before run phase..."
+    sudo swapoff -a
+    sudo swapon -a
 }
 
 run_benchmark() {
@@ -366,7 +372,7 @@ run_benchmark() {
     local repeat_suffix="${5:-}"
 
     local output_file="$RESULTS_DIR/${db}_${scenario}_${workload}_${phase}${repeat_suffix}_${TIMESTAMP}.log"
-    local properties_file="${db}/${db}.properties"
+    local properties_file="adapters/${db}/${db}.properties"
     local cmd=()
     local mode_args=()
     local scenario_args=()
@@ -475,7 +481,7 @@ summarize_results() {
 }
 
 generate_matrix_csv() {
-    local throughput_csv="$RESULTS_DIR/throughput_matrix_${TIMESTAMP}.csv"
+    local throughput_csv="$RESULTS_DIR/throughput_matrix.csv"
     local durability_csv="$RESULTS_DIR/durability_session_matrix_${TIMESTAMP}.csv"
     local i
 
@@ -554,6 +560,8 @@ for db in "${DATABASES[@]}"; do
                 echo "WARNING: load phase failed for $db $scenario $workload"
                 continue 2
             fi
+
+            reset_swap
 
             repeat_suffix="_r${r}"
             if ! run_benchmark "$db" "$scenario" "$workload" "run" "$repeat_suffix"; then

@@ -52,7 +52,7 @@ option(WITH_BZ2 "linking YCSB with bzip2" OFF)
 
 file(GLOB_RECURSE YCSB_CORE_SRC "core/*.cc")
 list(APPEND YCSB_CORE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/utils/sha256.cpp")
-file(GLOB_RECURSE YCSB_NULL_SRC "null/*.cc")
+file(GLOB_RECURSE YCSB_NULL_SRC "adapters/null/*.cc")
 
 include(FindThreads)
 
@@ -68,7 +68,7 @@ if (BIND_ROCKSDB)
     message(STATUS "BIND_ROCKSDB - ON")
     set(WITH_ZLIB ON)
     set(WITH_BZ2 ON)
-    file(GLOB_RECURSE YCSB_ROCKSDB_SRC "rocksdb/*.cc")
+    file(GLOB_RECURSE YCSB_ROCKSDB_SRC "adapters/rocksdb/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_ROCKSDB_SRC})
     if(NOT MSVC)
         set_source_files_properties(${YCSB_ROCKSDB_SRC}
@@ -99,7 +99,7 @@ endif()
 
 if (BIND_LMDB)
     message(STATUS "BIND_LMDB - ON")
-    file(GLOB_RECURSE YCSB_LMDB_SRC "lmdb/*.cc")
+    file(GLOB_RECURSE YCSB_LMDB_SRC "adapters/lmdb/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_LMDB_SRC})
     if(NOT MSVC)
         set_source_files_properties(${YCSB_LMDB_SRC}
@@ -123,7 +123,7 @@ endif()
 
 if (BIND_LEVELDB)
     message(STATUS "BIND_LEVELDB - ON")
-    file(GLOB_RECURSE YCSB_LEVELDB_SRC "leveldb/*.cc")
+    file(GLOB_RECURSE YCSB_LEVELDB_SRC "adapters/leveldb/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_LEVELDB_SRC})
     if(NOT MSVC)
         set_source_files_properties(${YCSB_LEVELDB_SRC}
@@ -147,7 +147,7 @@ endif ()
 
 if (BIND_WIREDTIGER)
     message(STATUS "BIND_WIREDTIGER - ON")
-    file(GLOB_RECURSE YCSB_WT_SRC "wiredtiger/*.cc")
+    file(GLOB_RECURSE YCSB_WT_SRC "adapters/wiredtiger/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_WT_SRC})
     if(NOT MSVC)
         set_source_files_properties(${YCSB_WT_SRC}
@@ -163,7 +163,7 @@ endif()
 
 if (BIND_LEAVES)
     message(STATUS "BIND_LEAVES - ON")
-    file(GLOB_RECURSE YCSB_LEAVES_SRC "leaves/*.cc")
+    file(GLOB_RECURSE YCSB_LEAVES_SRC "adapters/leaves/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_LEAVES_SRC})
     
     # Leaves is header-only, so we just need to add include directory
@@ -184,6 +184,16 @@ if (BIND_LEAVES)
         endforeach()
         message(STATUS "Applied GCC optimizations to Leaves files: -DNDEBUG -DLEAVES_SINGLE_PROCESS -g -march=native -O3 -funroll-loops -flto=auto")
     endif()
+
+    # Add LEAVES_SINGLE_PROCESS for Leaves files in Debug mode
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        foreach(LEAVES_FILE ${YCSB_LEAVES_SRC})
+            set_source_files_properties(${LEAVES_FILE} PROPERTIES
+                COMPILE_FLAGS "-DLEAVES_SINGLE_PROCESS -g -O0"
+            )
+        endforeach()
+        message(STATUS "Applied Debug flags to Leaves files: -DLEAVES_SINGLE_PROCESS -g -O0")
+    endif()
     
     message(STATUS "Found Leaves library (header-only)")
 else()
@@ -192,7 +202,7 @@ endif()
 
 if (BIND_SQLITE)
     message(STATUS "BIND_SQLITE - ON")
-    file(GLOB_RECURSE YCSB_SQLITE_SRC "sqlite/*.cc")
+    file(GLOB_RECURSE YCSB_SQLITE_SRC "adapters/sqlite/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_SQLITE_SRC})
     if(NOT MSVC)
         set_source_files_properties(${YCSB_SQLITE_SRC}
@@ -217,7 +227,7 @@ endif()
 
 if (BIND_REDIS)
     message(STATUS "BIND_REDIS - ON")
-    file(GLOB_RECURSE YCSB_REDIS_SRC "redis/*.cc")
+    file(GLOB_RECURSE YCSB_REDIS_SRC "adapters/redis/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_REDIS_SRC})
     
     find_library(HIREDIS_LIB hiredis REQUIRED)
@@ -231,7 +241,7 @@ endif()
 
 if (BIND_AEROSPIKE)
     message(STATUS "BIND_AEROSPIKE - ON")
-    file(GLOB_RECURSE YCSB_AEROSPIKE_SRC "aerospike/*.cc")
+    file(GLOB_RECURSE YCSB_AEROSPIKE_SRC "adapters/aerospike/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_AEROSPIKE_SRC})
     
     find_library(AEROSPIKE_LIB aerospike REQUIRED)
@@ -247,10 +257,10 @@ endif()
 
 if (BIND_BADGER)
     message(STATUS "BIND_BADGER - ON")
-    file(GLOB_RECURSE YCSB_BADGER_SRC "badger/*.cc")
+    file(GLOB_RECURSE YCSB_BADGER_SRC "adapters/badger/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_BADGER_SRC})
 
-    set(CBADGER_DIR ${PROJECT_SOURCE_DIR}/badger/cbadger)
+    set(CBADGER_DIR ${PROJECT_SOURCE_DIR}/adapters/badger/cbadger)
     set(CBADGER_LIB_PATH ${CBADGER_DIR}/libcbadger.a)
 
     # Add a custom command to build the Go library
@@ -270,7 +280,7 @@ if (BIND_BADGER)
 
     # Link the library that will be built by the custom command
     target_link_libraries(ycsb PRIVATE ${CBADGER_LIB_PATH})
-    target_include_directories(ycsb PRIVATE ${PROJECT_SOURCE_DIR}/badger)
+    target_include_directories(ycsb PRIVATE ${PROJECT_SOURCE_DIR}/adapters/badger)
     message(STATUS "Configured BadgerDB CGo library build")
 else()
     message(STATUS "BIND_BADGER - OFF")

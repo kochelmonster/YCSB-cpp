@@ -53,10 +53,10 @@ Configuration options are set in `sqlite.properties`:
 
 ```bash
 # Load data
-./build/ycsb -load -db sqlite -P sqlite/sqlite.properties -P workloads/workloada
+./build/ycsb -load -db sqlite -P adapters/sqlite/sqlite.properties -P workloads/workloada
 
 # Run workload
-./build/ycsb -run -db sqlite -P sqlite/sqlite.properties -P workloads/workloada
+./build/ycsb -run -db sqlite -P adapters/sqlite/sqlite.properties -P workloads/workloada
 ```
 
 ## Performance Characteristics

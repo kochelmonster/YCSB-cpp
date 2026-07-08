@@ -5,7 +5,7 @@
 # The operation count represents individual operations (half as many transactions).
 
 recordcount=1000000
-operationcount=4000
+operationcount=10000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
 readallfields=true

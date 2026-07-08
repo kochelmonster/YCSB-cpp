@@ -67,7 +67,7 @@ make
 
 ## Configuration
 
-Edit `aerospike/aerospike.properties`:
+Edit `adapters/aerospike/aerospike.properties`:
 
 ```properties
 # Server connection
@@ -125,14 +125,14 @@ sudo make install
 ### Load Data
 ```bash
 ./ycsb -load -db aerospike \
-  -P aerospike/aerospike.properties \
+  -P adapters/aerospike/aerospike.properties \
   -P workloads/workloada
 ```
 
 ### Run Benchmark
 ```bash
 ./ycsb -run -db aerospike \
-  -P aerospike/aerospike.properties \
+  -P adapters/aerospike/aerospike.properties \
   -P workloads/workloada
 ```
 

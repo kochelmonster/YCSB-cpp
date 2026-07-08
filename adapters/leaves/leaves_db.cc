@@ -36,6 +36,10 @@ const std::string PROP_SYNC_DEFAULT = "false";
 const std::string PROP_MERGE_THRESHOLD = "leaves.merge_threshold";
 const std::string PROP_MERGE_THRESHOLD_DEFAULT = "0";  // 0 = leave default
 
+const std::string PROP_MAX_ATTACHED_AGE_MS = "leaves.max_attached_age_ms";
+const std::string PROP_MAX_ATTACHED_AGE_MS_DEFAULT =
+  "0";  // 0 = leave default
+
 const std::string PROP_WAL = "leaves.wal";
 const std::string PROP_WAL_DEFAULT = "false";
 }  // namespace
@@ -103,11 +107,19 @@ void LeavesDB::Init() {
       uint32_t merge_threshold =
           static_cast<uint32_t>(std::stoul(props.GetProperty(
               PROP_MERGE_THRESHOLD, PROP_MERGE_THRESHOLD_DEFAULT)));
+      uint64_t max_attached_age_ms =
+          static_cast<uint64_t>(std::stoull(props.GetProperty(
+              PROP_MAX_ATTACHED_AGE_MS, PROP_MAX_ATTACHED_AGE_MS_DEFAULT)));
 
       if (merge_threshold > 0) {
         confluence_db_->set_merge_write_threshold(merge_threshold);
         std::cout << "Leaves merge_write_threshold set to " << merge_threshold
                   << std::endl;
+      }
+      if (max_attached_age_ms > 0) {
+        confluence_db_->set_max_attached_age_ms(max_attached_age_ms);
+        std::cout << "Leaves max_attached_age_ms set to "
+                  << max_attached_age_ms << std::endl;
       }
     }
     confluence_cursor_ = confluence_db_->cursor();

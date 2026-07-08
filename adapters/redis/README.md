@@ -53,12 +53,12 @@ redis-server
 
 2. Load data:
 ```bash
-./build/ycsb -load -db redis -P redis/redis.properties -P workloads/workloada
+./build/ycsb -load -db redis -P adapters/redis/redis.properties -P workloads/workloada
 ```
 
 3. Run workload:
 ```bash
-./build/ycsb -run -db redis -P redis/redis.properties -P workloads/workloada
+./build/ycsb -run -db redis -P adapters/redis/redis.properties -P workloads/workloada
 ```
 
 ## Data Model

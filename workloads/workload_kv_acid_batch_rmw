@@ -11,11 +11,11 @@
 # Read/RMW ratio: 0/100
 # Request distribution: zipfian
 #
-# With batch_size=8 and operationcount=5000:
-#   ~625 transactions (each with 8 RMW ops = 16 DB calls)
+# With batch_size=8 and operationcount=10000:
+#   ~1250 transactions (each with 8 RMW ops = 16 DB calls)
 
 recordcount=1000000
-operationcount=5000
+operationcount=10000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
 readallfields=true
