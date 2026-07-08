@@ -29,6 +29,7 @@
         "BIND_LEVELDB": "ON",
         "BIND_WIREDTIGER": "ON",
         "BIND_LEAVES": "ON",
+        "BIND_SQLITE": "ON",
         "WITH_ZLIB": "ON",
         "WITH_LZ4": "ON",
         "WITH_SNAPPY": "ON",

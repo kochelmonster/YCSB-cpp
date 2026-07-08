@@ -28,10 +28,11 @@ void BasicDB::Init() {
   }
 }
 
-DB::Status BasicDB::Read(const std::string &table, const std::string &key,
-                         const std::unordered_set<std::string> *fields, Fields &result) {
+DB::Status BasicDB::Read(const std::string &table, Slice key,
+                         const std::unordered_set<std::string> *fields, Fields &result,
+                         bool rmw) {
   std::lock_guard<std::mutex> lock(mutex_);
-  *out_ << "READ " << table << ' ' << key;
+  *out_ << "READ " << table << ' ' << key.ToString();
   if (fields) {
     *out_ << " [ ";
     for (auto f : *fields) {
@@ -44,11 +45,11 @@ DB::Status BasicDB::Read(const std::string &table, const std::string &key,
   return kOK;
 }
 
-DB::Status BasicDB::Scan(const std::string &table, const std::string &key, int len,
+DB::Status BasicDB::Scan(const std::string &table, Slice key, int len,
                          const std::unordered_set<std::string> *fields,
                          std::vector<Fields> &result) {
   std::lock_guard<std::mutex> lock(mutex_);
-  *out_ << "SCAN " << table << ' ' << key << " " << len;
+  *out_ << "SCAN " << table << ' ' << key.ToString() << " " << len;
   if (fields) {
     *out_ << " [ ";
     for (auto f : *fields) {
@@ -61,10 +62,10 @@ DB::Status BasicDB::Scan(const std::string &table, const std::string &key, int l
   return kOK;
 }
 
-DB::Status BasicDB::Update(const std::string &table, const std::string &key,
-                           Fields &values) {
+DB::Status BasicDB::Update(const std::string &table, Slice key,
+                           const ReadonlyFields &values) {
   std::lock_guard<std::mutex> lock(mutex_);
-  *out_ << "UPDATE " << table << ' ' << key << " [ ";
+  *out_ << "UPDATE " << table << ' ' << key.ToString() << " [ ";
   for (auto it = values.begin(); it != values.end(); ++it) {
     auto [name, value] = *it;
     *out_ << name.ToString() << '=' << value.ToString() << ' ';
@@ -73,10 +74,10 @@ DB::Status BasicDB::Update(const std::string &table, const std::string &key,
   return kOK;
 }
 
-DB::Status BasicDB::Insert(const std::string &table, const std::string &key,
-                           Fields &values) {
+DB::Status BasicDB::Insert(const std::string &table, Slice key,
+                           const ReadonlyFields &values) {
   std::lock_guard<std::mutex> lock(mutex_);
-  *out_ << "INSERT " << table << ' ' << key << " [ ";
+  *out_ << "INSERT " << table << ' ' << key.ToString() << " [ ";
   for (auto it = values.begin(); it != values.end(); ++it) {
     auto [name, value] = *it;
     *out_ << name.ToString() << '=' << value.ToString() << ' ';
@@ -85,9 +86,21 @@ DB::Status BasicDB::Insert(const std::string &table, const std::string &key,
   return kOK;
 }
 
-DB::Status BasicDB::Delete(const std::string &table, const std::string &key) {
+DB::Status BasicDB::Load(const std::string &table, Dataset &batch) {
   std::lock_guard<std::mutex> lock(mutex_);
-  *out_ << "DELETE " << table << ' ' << key << std::endl;
+  *out_ << "LOAD " << table << " [ ";
+  int n = batch.OpCount();
+  for (int i = 0; i < n; ++i) {
+    const auto &item = batch.Next();
+    *out_ << item.key.ToString() << ' ';
+  }
+  *out_ << ']' << std::endl;
+  return kOK;
+}
+
+DB::Status BasicDB::Delete(const std::string &table, Slice key) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  *out_ << "DELETE " << table << ' ' << key.ToString() << std::endl;
   return kOK;
 }
 

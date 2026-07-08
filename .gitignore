@@ -10,4 +10,7 @@ benchmark_graphs
 benchmark_results
 build/
 build-debug/
+build-profile*/
+profile_results/
 CMakeUserPresets.json
+.dataset

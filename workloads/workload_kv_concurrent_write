@@ -1,0 +1,51 @@
+# YCSB-cpp Application Workload: Concurrent Write-Heavy
+# Real-world pattern:
+#   - Multi-threaded log/event ingestion
+#   - Parallel ETL pipelines
+#   - High-fanin write aggregation
+#
+# This workload highlights engines with concurrent write scalability
+# (e.g. RocksDB group commit) vs single-writer designs (e.g. LMDB).
+#
+# Insert/update/read ratio: 70/20/10
+# Request distribution: uniform
+# Threads: 8
+#
+# leaves: set mapsize large enough for 5M load + run of 3.5M inserts.
+# After LOAD the DB is ~35GB; RUN adds ~25GB more → need 128GB to be safe.
+# Increased to 256GB after observing exhaustion at ~126GB in practice.
+leaves.mapsize=274877906944
+
+recordcount=5000000
+operationcount=5000000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+threadcount=8
+
+readallfields=true
+
+readproportion=0.10
+updateproportion=0.20
+scanproportion=0
+insertproportion=0.70
+readmodifywriteproportion=0
+
+requestdistribution=uniform
+insertorder=hashed
+hashalgo=sha256
+
+# Leaves-specific: use confluence for lock-free parallel writes across 8 threads.
+# Higher merge threshold than concurrent_session because writes dominate (90%).
+# Verified 2026-06-09: 5M records, 5M ops, 8 threads, 256GB mapsize:
+#   threshold=400000 → load=299K, run=38K ops/sec
+leaves.mapsize=274877906944
+leaves.format=confluence
+leaves.merge_threshold=128000
+
+# RocksDB: add a 2GB block cache.
+# 5M×1KB records = 5GB dataset; reads are only 10% of ops but still benefit
+# from caching the hot fraction of the key space (uniform distribution).
+rocksdb.cache_size=2147483648
+
+# WiredTiger: keep LSM (optimal for 70% insert workload) but increase cache
+# to 4GB to hold a meaningful fraction of the 5GB dataset in memory.
+wiredtiger.cache_size=4GB

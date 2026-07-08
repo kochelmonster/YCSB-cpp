@@ -1,0 +1,51 @@
+# YCSB-cpp Application Workload: Concurrent Session Store
+# Real-world pattern:
+#   - Multi-threaded web session management
+#   - Parallel user state reads and updates
+#   - Concurrent mutable record access
+#
+# Same mix as session (50/50 read/update) but with 8 threads
+# to stress concurrent read-write scalability.
+#
+# Read/update ratio: 50/50
+# Request distribution: zipfian
+# Threads: 8
+
+recordcount=5000000
+operationcount=5000000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+threadcount=8
+
+readallfields=true
+
+readproportion=0.50
+updateproportion=0.50
+scanproportion=0
+insertproportion=0
+readmodifywriteproportion=0
+
+requestdistribution=zipfian
+insertorder=hashed
+hashalgo=sha256
+
+# Leaves-specific: keep tributaries small so N-way reads stay cheap.
+leaves.merge_threshold=64
+leaves.format=confluence
+
+# RocksDB: enlarge block cache from 512MB to 2GB.
+# With 5M×1KB records (5GB), the warm-tier (top 10%, zipfian) occupies ~500MB.
+# 512MB is right at the edge; 2GB gives headroom to cache the full warm tier.
+rocksdb.cache_size=2147483648
+
+# WiredTiger: switch from LSM to BTree and increase cache to 4GB.
+# LSM with chunk_size=256MB creates ~20 chunks for a 5GB dataset, requiring
+# up to 20 bloom-filter probes per read. BTree has a single level — much
+# cheaper for the 50% read + 50% update mix of this workload.
+# Clear all LSM properties (empty value → !empty() guard skips them in binding).
+wiredtiger.cache_size=4GB
+wiredtiger.blk_mgr.bloom_bit_count=
+wiredtiger.blk_mgr.bloom_hash_count=
+wiredtiger.blk_mgr.chunk_max=
+wiredtiger.blk_mgr.chunk_size=
+wiredtiger.lsm_mgr.merge=
+wiredtiger.lsm_mgr.max_workers=

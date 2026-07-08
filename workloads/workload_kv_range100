@@ -8,8 +8,8 @@
 # Scan length: fixed 100 items
 # Request distribution: zipfian
 
-recordcount=100000
-operationcount=100000
+recordcount=1000000
+operationcount=500000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
 readallfields=true
@@ -25,3 +25,23 @@ requestdistribution=zipfian
 minscanlength=100
 maxscanlength=100
 scanlengthdistribution=uniform
+
+# RocksDB / LevelDB: increase block cache to cover the full 1M-record dataset (~1GB).
+# Range scans touch sequential key ranges; 1GB cache keeps the full working set hot.
+rocksdb.cache_size=1073741824
+leveldb.cache_size=1073741824
+
+# WiredTiger: switch from LSM to BTree.
+# Range scans require traversing sorted key order. LSM creates ~4 sorted runs for
+# 1GB of data, requiring a multi-way merge per scan. BTree navigates directly to
+# the scan start in O(log n) then reads sequentially.
+# Clear all LSM config properties (empty value → !empty() guard skips them).
+wiredtiger.blk_mgr.bloom_bit_count=
+wiredtiger.blk_mgr.bloom_hash_count=
+wiredtiger.blk_mgr.chunk_max=
+wiredtiger.blk_mgr.chunk_size=
+wiredtiger.lsm_mgr.merge=
+wiredtiger.lsm_mgr.max_workers=
+# Larger leaf pages hold more consecutive records per page I/O, reducing the
+# number of page reads per 100-record scan.
+wiredtiger.blk_mgr.btree.leaf_page_max=512KB

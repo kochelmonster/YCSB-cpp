@@ -6,18 +6,18 @@
 //  Copyright (c) 2014 Jinglei Ren <jinglei@ren.systems>.
 //
 
+#include <chrono>
 #include <cstring>
 #include <ctime>
-
-#include <string>
-#include <iostream>
-#include <vector>
-#include <thread>
 #include <future>
-#include <chrono>
 #include <iomanip>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <vector>
 
 #include "client.h"
+#include "core/dataset.h"
 #include "core_workload.h"
 #include "db_factory.h"
 #include "measurements.h"
@@ -26,11 +26,13 @@
 #include "utils/timer.h"
 #include "utils/utils.h"
 
-void UsageMessage(const char *command);
-bool StrStartWith(const char *str, const char *pre);
-void ParseCommandLine(int argc, const char *argv[], ycsbc::utils::Properties &props);
+void UsageMessage(const char* command);
+bool StrStartWith(const char* str, const char* pre);
+void ParseCommandLine(int argc, const char* argv[],
+                      ycsbc::utils::Properties& props);
 
-void StatusThread(ycsbc::Measurements *measurements, ycsbc::utils::CountDownLatch *latch, int interval) {
+void StatusThread(ycsbc::Measurements* measurements,
+                  ycsbc::utils::CountDownLatch* latch, int interval) {
   using namespace std::chrono;
   time_point<system_clock> start = system_clock::now();
   bool done = false;
@@ -51,8 +53,9 @@ void StatusThread(ycsbc::Measurements *measurements, ycsbc::utils::CountDownLatc
   };
 }
 
-void RateLimitThread(std::string rate_file, std::vector<ycsbc::utils::RateLimiter *> rate_limiters,
-                     ycsbc::utils::CountDownLatch *latch) {
+void RateLimitThread(std::string rate_file,
+                     std::vector<ycsbc::utils::RateLimiter*> rate_limiters,
+                     ycsbc::utils::CountDownLatch* latch) {
   std::ifstream ifs;
   ifs.open(rate_file);
 
@@ -84,12 +87,13 @@ void RateLimitThread(std::string rate_file, std::vector<ycsbc::utils::RateLimite
   }
 }
 
-int main(const int argc, const char *argv[]) {
+int main(const int argc, const char* argv[]) {
   ycsbc::utils::Properties props;
   ParseCommandLine(argc, argv, props);
 
   const bool do_load = (props.GetProperty("doload", "false") == "true");
-  const bool do_transaction = (props.GetProperty("dotransaction", "false") == "true");
+  const bool do_transaction =
+      (props.GetProperty("dotransaction", "false") == "true");
   if (!do_load && !do_transaction) {
     std::cerr << "No operation to do" << std::endl;
     exit(1);
@@ -97,20 +101,10 @@ int main(const int argc, const char *argv[]) {
 
   const int num_threads = stoi(props.GetProperty("threadcount", "1"));
 
-  ycsbc::Measurements *measurements = ycsbc::CreateMeasurements(&props);
+  ycsbc::Measurements* measurements = ycsbc::CreateMeasurements(&props);
   if (measurements == nullptr) {
     std::cerr << "Unknown measurements name" << std::endl;
     exit(1);
-  }
-
-  std::vector<ycsbc::DB *> dbs;
-  for (int i = 0; i < num_threads; i++) {
-    ycsbc::DB *db = ycsbc::DBFactory::CreateDB(&props, measurements);
-    if (db == nullptr) {
-      std::cerr << "Unknown database name " << props["dbname"] << std::endl;
-      exit(1);
-    }
-    dbs.push_back(db);
   }
 
   ycsbc::CoreWorkload wl;
@@ -118,97 +112,141 @@ int main(const int argc, const char *argv[]) {
 
   // print status periodically
   const bool show_status = (props.GetProperty("status", "false") == "true");
-  const int status_interval = std::stoi(props.GetProperty("status.interval", "10"));
+  const int status_interval =
+      std::stoi(props.GetProperty("status.interval", "10"));
 
   // load phase
   if (do_load) {
-    const int total_ops = stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
+    const int total_ops =
+        stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
 
-    ycsbc::utils::CountDownLatch latch(num_threads);
+    // Pre-generate all keys and values outside the timed window so the
+    // measurement reflects DB cost, not YCSB framework cost (BuildKeyName,
+    // BuildValues, RNG, ...).
+    ycsbc::Dataset load_dataset(props, wl, 0, true);
+    const bool force_generate =
+        ycsbc::utils::StrToBool(props.GetProperty("force_generate", "false"));
+    struct stat buffer;
+    if (stat(load_dataset.GetFullPath(total_ops).c_str(), &buffer) != 0 ||
+        force_generate) {
+      load_dataset.Generate(total_ops);
+    }
+    load_dataset.Open(total_ops);
+
     ycsbc::utils::Timer<double> timer;
 
+    // Use a dedicated DB instance for the load phase
+    ycsbc::DB* load_db = ycsbc::DBFactory::CreateDB(&props, measurements);
+    if (load_db == nullptr) {
+      std::cerr << "Unknown database name " << props["dbname"] << std::endl;
+      exit(1);
+    }
+    load_db->Init();
+
+    const std::string& table = wl.table_name();
+
     timer.Start();
-    std::future<void> status_future;
-    if (show_status) {
-      status_future = std::async(std::launch::async, StatusThread,
-                                 measurements, &latch, status_interval);
-    }
-    std::vector<std::future<int>> client_threads;
-    for (int i = 0; i < num_threads; ++i) {
-      int thread_ops = total_ops / num_threads;
-      if (i < total_ops % num_threads) {
-        thread_ops++;
-      }
-
-      client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                                             thread_ops, true, true, !do_transaction, &latch, nullptr));
-    }
-    assert((int)client_threads.size() == num_threads);
-
-    int sum = 0;
-    for (auto &n : client_threads) {
-      assert(n.valid());
-      sum += n.get();
-    }
+    load_db->Load(table, load_dataset);
     double runtime = timer.End();
 
-    if (show_status) {
-      status_future.wait();
-    }
-
     std::cout << "Load runtime(sec): " << runtime << std::endl;
-    std::cout << "Load operations(ops): " << sum << std::endl;
-    std::cout << "Load throughput(ops/sec): " << sum / runtime << std::endl;
+    std::cout << "Load operations(ops): " << total_ops << std::endl;
+    std::cout << "Load throughput(ops/sec): " << total_ops / runtime << std::endl;
+
+    load_db->Cleanup();
+    delete load_db;
   }
 
   measurements->Reset();
-  std::this_thread::sleep_for(std::chrono::seconds(stoi(props.GetProperty("sleepafterload", "0"))));
-
+  std::this_thread::sleep_for(
+      std::chrono::seconds(stoi(props.GetProperty("sleepafterload", "0"))));
 
   // transaction phase
   if (do_transaction) {
     // initial ops per second, unlimited if <= 0
     const int64_t ops_limit = std::stoi(props.GetProperty("limit.ops", "0"));
-    // rate file path for dynamic rate limiting, format "time_stamp_sec new_ops_per_second" per line
+    // rate file path for dynamic rate limiting, format "time_stamp_sec
+    // new_ops_per_second" per line
     std::string rate_file = props.GetProperty("limit.file", "");
 
-    const int total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
+    const int total_ops =
+        stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
+
+    // Compute per-thread op counts up front (needed for pre-generation)
+    std::vector<int> txn_thread_ops(num_threads);
+    for (int i = 0; i < num_threads; ++i) {
+      txn_thread_ops[i] = total_ops / num_threads;
+      if (i < total_ops % num_threads) txn_thread_ops[i]++;
+    }
+
+    // Pre-generate all keys and values outside the timed window so the
+    // measurement reflects DB cost, not YCSB framework cost.
+    std::vector<std::unique_ptr<ycsbc::Dataset>> txn_datasets;
+    const bool force_generate =
+        ycsbc::utils::StrToBool(props.GetProperty("force_generate", "false"));
+    for (int i = 0; i < num_threads; ++i) {
+      txn_datasets.emplace_back(new ycsbc::Dataset(props, wl, i, false));
+      struct stat buffer;
+      if (stat(txn_datasets.back()->GetFullPath(txn_thread_ops[i]).c_str(),
+               &buffer) != 0 ||
+          force_generate) {
+        txn_datasets.back()->Generate(txn_thread_ops[i]);
+      }
+      //txn_datasets.back()->DEBUG(txn_thread_ops[i]);
+      txn_datasets.back()->Open(txn_thread_ops[i]);
+    }
+
+    // Create fresh DB instances for the transaction phase
+    std::vector<ycsbc::DB*> dbs;
+    for (int i = 0; i < num_threads; i++) {
+      ycsbc::DB* db = ycsbc::DBFactory::CreateDB(&props, measurements);
+      if (db == nullptr) {
+        std::cerr << "Unknown database name " << props["dbname"] << std::endl;
+        exit(1);
+      }
+      dbs.push_back(db);
+    }
 
     ycsbc::utils::CountDownLatch latch(num_threads);
     ycsbc::utils::Timer<double> timer;
 
-    timer.Start();
+    // Initialize all DB instances before the timed window
+    for (int i = 0; i < num_threads; ++i) {
+      dbs[i]->Init();
+    }
+
     std::future<void> status_future;
     if (show_status) {
-      status_future = std::async(std::launch::async, StatusThread,
-                                 measurements, &latch, status_interval);
+      status_future = std::async(std::launch::async, StatusThread, measurements,
+                                 &latch, status_interval);
     }
     std::vector<std::future<int>> client_threads;
-    std::vector<ycsbc::utils::RateLimiter *> rate_limiters;
+    std::vector<ycsbc::utils::RateLimiter*> rate_limiters;
+    
+    timer.Start();
     for (int i = 0; i < num_threads; ++i) {
-      int thread_ops = total_ops / num_threads;
-      if (i < total_ops % num_threads) {
-        thread_ops++;
-      }
-      ycsbc::utils::RateLimiter *rlim = nullptr;
+      ycsbc::utils::RateLimiter* rlim = nullptr;
       if (ops_limit > 0 || rate_file != "") {
         int64_t per_thread_ops = ops_limit / num_threads;
         rlim = new ycsbc::utils::RateLimiter(per_thread_ops, per_thread_ops);
       }
       rate_limiters.push_back(rlim);
-      client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                                             thread_ops, false, !do_load, true, &latch, rlim));
+      client_threads.emplace_back(
+          std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
+                     txn_thread_ops[i], &latch, rlim,
+                     txn_datasets[i].get()));
     }
 
     std::future<void> rlim_future;
     if (rate_file != "") {
-      rlim_future = std::async(std::launch::async, RateLimitThread, rate_file, rate_limiters, &latch);
+      rlim_future = std::async(std::launch::async, RateLimitThread, rate_file,
+                               rate_limiters, &latch);
     }
 
     assert((int)client_threads.size() == num_threads);
 
     int sum = 0;
-    for (auto &n : client_threads) {
+    for (auto& n : client_threads) {
       assert(n.valid());
       sum += n.get();
     }
@@ -218,23 +256,28 @@ int main(const int argc, const char *argv[]) {
       status_future.wait();
     }
 
+    std::cout << measurements->GetStatusMsg() << std::endl;
     std::cout << "Run runtime(sec): " << runtime << std::endl;
     std::cout << "Run operations(ops): " << sum << std::endl;
     std::cout << "Run throughput(ops/sec): " << sum / runtime << std::endl;
-  }
 
-  for (int i = 0; i < num_threads; i++) {
-    delete dbs[i];
+    // Cleanup and delete all DB instances after the timed window
+    for (int i = 0; i < num_threads; ++i) {
+      dbs[i]->Cleanup();
+      delete dbs[i];
+    }
   }
 }
 
-void ParseCommandLine(int argc, const char *argv[], ycsbc::utils::Properties &props) {
+void ParseCommandLine(int argc, const char* argv[],
+                      ycsbc::utils::Properties& props) {
   int argindex = 1;
   while (argindex < argc && StrStartWith(argv[argindex], "-")) {
     if (strcmp(argv[argindex], "-load") == 0) {
       props.SetProperty("doload", "true");
       argindex++;
-    } else if (strcmp(argv[argindex], "-run") == 0 || strcmp(argv[argindex], "-t") == 0) {
+    } else if (strcmp(argv[argindex], "-run") == 0 ||
+               strcmp(argv[argindex], "-t") == 0) {
       props.SetProperty("dotransaction", "true");
       argindex++;
     } else if (strcmp(argv[argindex], "-threads") == 0) {
@@ -266,7 +309,7 @@ void ParseCommandLine(int argc, const char *argv[], ycsbc::utils::Properties &pr
       std::ifstream input(argv[argindex]);
       try {
         props.Load(input);
-      } catch (const std::string &message) {
+      } catch (const std::string& message) {
         std::cerr << message << std::endl;
         exit(0);
       }
@@ -283,7 +326,8 @@ void ParseCommandLine(int argc, const char *argv[], ycsbc::utils::Properties &pr
       size_t eq = prop.find('=');
       if (eq == std::string::npos) {
         std::cerr << "Argument '-p' expected to be in key=value format "
-                     "(e.g., -p operationcount=99999)" << std::endl;
+                     "(e.g., -p operationcount=99999)"
+                  << std::endl;
         exit(0);
       }
       props.SetProperty(ycsbc::utils::Trim(prop.substr(0, eq)),
@@ -305,25 +349,30 @@ void ParseCommandLine(int argc, const char *argv[], ycsbc::utils::Properties &pr
   }
 }
 
-void UsageMessage(const char *command) {
-  std::cout <<
-      "Usage: " << command << " [options]\n"
-      "Options:\n"
-      "  -load: run the loading phase of the workload\n"
-      "  -t: run the transactions phase of the workload\n"
-      "  -run: same as -t\n"
-      "  -threads n: execute using n threads (default: 1)\n"
-      "  -db dbname: specify the name of the DB to use (default: basic)\n"
-      "  -P propertyfile: load properties from the given file. Multiple files can\n"
-      "                   be specified, and will be processed in the order specified\n"
-      "  -p name=value: specify a property to be passed to the DB and workloads\n"
-      "                 multiple properties can be specified, and override any\n"
-      "                 values in the propertyfile\n"
-      "  -s: print status every 10 seconds (use status.interval prop to override)"
+void UsageMessage(const char* command) {
+  std::cout
+      << "Usage: " << command
+      << " [options]\n"
+         "Options:\n"
+         "  -load: run the loading phase of the workload\n"
+         "  -t: run the transactions phase of the workload\n"
+         "  -run: same as -t\n"
+         "  -threads n: execute using n threads (default: 1)\n"
+         "  -db dbname: specify the name of the DB to use (default: basic)\n"
+         "  -P propertyfile: load properties from the given file. Multiple "
+         "files can\n"
+         "                   be specified, and will be processed in the order "
+         "specified\n"
+         "  -p name=value: specify a property to be passed to the DB and "
+         "workloads\n"
+         "                 multiple properties can be specified, and override "
+         "any\n"
+         "                 values in the propertyfile\n"
+         "  -s: print status every 10 seconds (use status.interval prop to "
+         "override)"
       << std::endl;
 }
 
-inline bool StrStartWith(const char *str, const char *pre) {
+inline bool StrStartWith(const char* str, const char* pre) {
   return strncmp(str, pre, strlen(pre)) == 0;
 }
-

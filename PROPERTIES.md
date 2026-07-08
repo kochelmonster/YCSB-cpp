@@ -78,7 +78,7 @@ Rate File Format: Each line contains `timestamp_seconds new_ops_per_second`
 
 ### LevelDB Properties
 
-LevelDB properties are prefixed with `leveldb.`. Example configuration file: `leveldb/leveldb.properties`.
+LevelDB properties are prefixed with `leveldb.`. Example configuration file: `adapters/leveldb/leveldb.properties`.
 
 | Property | Default | Description |
 |----------|---------|-------------|
@@ -98,7 +98,7 @@ LevelDB properties are prefixed with `leveldb.`. Example configuration file: `le
 
 ### RocksDB Properties
 
-RocksDB properties are prefixed with `rocksdb.`. Example configuration file: `rocksdb/rocksdb.properties`.
+RocksDB properties are prefixed with `rocksdb.`. Example configuration file: `adapters/rocksdb/rocksdb.properties`.
 
 #### Basic Configuration
 
@@ -160,7 +160,7 @@ RocksDB properties are prefixed with `rocksdb.`. Example configuration file: `ro
 
 ### LMDB Properties
 
-LMDB properties are prefixed with `lmdb.`. Example configuration file: `lmdb/lmdb.properties`.
+LMDB properties are prefixed with `lmdb.`. Example configuration file: `adapters/lmdb/lmdb.properties`.
 
 | Property | Default | Description |
 |----------|---------|-------------|
@@ -176,7 +176,7 @@ LMDB properties are prefixed with `lmdb.`. Example configuration file: `lmdb/lmd
 
 ### WiredTiger Properties
 
-WiredTiger properties are prefixed with `wiredtiger.`. Example configuration file: `wiredtiger/wiredtiger.properties`.
+WiredTiger properties are prefixed with `wiredtiger.`. Example configuration file: `adapters/wiredtiger/wiredtiger.properties`.
 
 #### Basic Configuration
 
@@ -216,7 +216,7 @@ WiredTiger properties are prefixed with `wiredtiger.`. Example configuration fil
 
 ### Leaves Properties
 
-Leaves properties are prefixed with `leaves.`. Example configuration file: `leaves/leaves.properties`.
+Leaves properties are prefixed with `leaves.`. Example configuration file: `adapters/leaves/leaves.properties`.
 
 | Property | Default | Description |
 |----------|---------|-------------|
@@ -225,12 +225,13 @@ Leaves properties are prefixed with `leaves.`. Example configuration file: `leav
 | `leaves.format` | `single` | Row format to use |
 | `leaves.destroy` | `false` | Destroy database on startup |
 | `leaves.sync` | `false` | Force synchronous commits |
+| `leaves.merge_threshold` | `0` | Confluence only: merge a tributary after this many writes (0 = library default) |
+| `leaves.max_attached_age_ms` | `0` | Confluence only: max attached tributary age in milliseconds before merge (0 = library default) |
 | `leaves.binary_key` | `false` | Encode keys as 8-byte big-endian integers instead of ASCII YCSB keys |
-| `leaves.batch_size` | `1` | Number of pending mutations to batch before commit |
 
 ### SQLite Properties
 
-SQLite properties are prefixed with `sqlite.`. Example configuration file: `sqlite/sqlite.properties`.
+SQLite properties are prefixed with `sqlite.`. Example configuration file: `adapters/sqlite/sqlite.properties`.
 
 | Property | Default | Description |
 |----------|---------|-------------|
@@ -247,10 +248,10 @@ SQLite properties are prefixed with `sqlite.`. Example configuration file: `sqli
 
 ```bash
 # Load data
-./ycsb -load -db rocksdb -P workloads/workloada -P rocksdb/rocksdb.properties
+./ycsb -load -db rocksdb -P workloads/workloada -P adapters/rocksdb/rocksdb.properties
 
 # Run workload
-./ycsb -run -db rocksdb -P workloads/workloada -P rocksdb/rocksdb.properties
+./ycsb -run -db rocksdb -P workloads/workloada -P adapters/rocksdb/rocksdb.properties
 ```
 
 ### Custom Properties
@@ -296,5 +297,5 @@ another.property=another_value
 Load multiple property files:
 
 ```bash
-./ycsb -load -db rocksdb -P workloads/workloada -P rocksdb/rocksdb.properties -P custom.properties
+./ycsb -load -db rocksdb -P workloads/workloada -P adapters/rocksdb/rocksdb.properties -P custom.properties
 ```

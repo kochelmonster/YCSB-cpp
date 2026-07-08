@@ -6,8 +6,8 @@
 # Insert/update/read ratio: 80/15/5
 # Request distribution: uniform
 
-recordcount=100000
-operationcount=100000
+recordcount=1000000
+operationcount=1000000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
 readallfields=true
@@ -20,13 +20,5 @@ readmodifywriteproportion=0
 
 requestdistribution=uniform
 insertorder=hashed
-
-# Default batching and binary keys for maximum throughput
-leaves.batch_size=64
-lmdb.batch_size=64
-leveldb.batch_size=64
-rocksdb.batch_size=64
-leaves.binary_key=true
-lmdb.binary_key=true
-leveldb.binary_key=true
-rocksdb.binary_key=true
+hashalgo=sha256
+batch_size=64

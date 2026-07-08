@@ -53,6 +53,7 @@ class ReadonlyFields {
     if (data_.size() < sizeof(uint32_t)) return 0;
     return *reinterpret_cast<const uint32_t*>(data_.data());
   }
+
   bool empty() const { return size() == 0; }
   
   // Iterator for reading fields
@@ -131,7 +132,7 @@ class ReadonlyFields {
 class Fields : public ReadonlyFields {
  public:
   Fields() {
-    buffer_.reserve(1024); // Pre-allocate reasonable size
+    buffer_.reserve(2048); // Pre-allocate reasonable size
     // Initialize with count = 0
     buffer_.resize(sizeof(uint32_t));
     *reinterpret_cast<uint32_t*>(&buffer_[0]) = 0;

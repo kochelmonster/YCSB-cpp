@@ -1,0 +1,101 @@
+// Copyright 2023 Chengye YU <yuchengye2013 AT outlook.com>.
+// SPDX-License-Identifier: Apache-2.0
+
+#ifndef _WIREDTIGER_DB_H
+#define _WIREDTIGER_DB_H
+
+#include <string>
+#include <mutex>
+
+#include "core/dataset.h"
+#include "core/db.h"
+#include "utils/properties.h"
+
+#include "wiredtiger.h"
+#include "wiredtiger_ext.h"
+
+namespace ycsbc {
+
+class WTDB : public DB {
+ public:
+  WTDB() {}
+  ~WTDB() {}
+
+  void Init();
+
+  // Cleanup the database, closing the session and connection.
+  // This method is idempotent and can be called multiple times.
+  void Cleanup();
+
+  Status BeginTransaction();
+
+  Status CommitTransaction();
+
+  Status RollbackTransaction();
+
+  Status Read(const std::string &table, Slice key,
+              const std::unordered_set<std::string> *fields, Fields &result,
+              bool rmw = false) {
+    return (this->*(method_read_))(table, key, fields, result, rmw);
+  }
+
+  Status Scan(const std::string &table, Slice key, int len,
+              const std::unordered_set<std::string> *fields, std::vector<Fields> &result) {
+    return (this->*(method_scan_))(table, key, len, fields, result);
+  }
+
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values) {
+    return (this->*(method_update_))(table, key, values);
+  }
+
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values) {
+    return (this->*(method_insert_))(table, key, values);
+  }
+
+  Status Delete(const std::string &table, Slice key) {
+    return (this->*(method_delete_))(table, key);
+  }
+
+  Status Load(const std::string &table, Dataset &batch);
+
+ private:
+
+  Status ReadSingleEntry(const std::string &table, Slice key,
+                         const std::unordered_set<std::string> *fields, Fields &result,
+                         bool rmw = false);
+  Status ScanSingleEntry(const std::string &table, Slice key, int len,
+                         const std::unordered_set<std::string> *fields,
+                         std::vector<Fields> &result);
+  Status UpdateSingleEntry(const std::string &table, Slice key,
+                           const ReadonlyFields &values);
+  Status InsertSingleEntry(const std::string &table, Slice key,
+                           const ReadonlyFields &values);
+  Status DeleteSingleEntry(const std::string &table, Slice key);
+
+  Status (WTDB::*method_read_)(const std::string &, Slice,
+                                    const std::unordered_set<std::string> *, Fields &,
+                                    bool);
+  Status (WTDB::*method_scan_)(const std::string &, Slice, int,
+                                    const std::unordered_set<std::string> *,
+                                    std::vector<Fields> &);
+  Status (WTDB::*method_update_)(const std::string &, Slice,
+                                      const ReadonlyFields &);
+  Status (WTDB::*method_insert_)(const std::string &, Slice,
+                                      const ReadonlyFields &);
+  Status (WTDB::*method_delete_)(const std::string &, Slice);
+
+  static WT_CONNECTION *conn_;
+  WT_SESSION *session_{nullptr};
+  WT_CURSOR *cursor_{nullptr};
+  bool transaction_active_{false};
+  Fields current_values_;
+  static int ref_cnt_;
+  static std::mutex mu_;
+
+};
+
+DB *NewWTDB();
+
+} // namespace ycsbc
+
+#endif
