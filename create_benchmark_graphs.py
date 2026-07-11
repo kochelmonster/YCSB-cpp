@@ -14,6 +14,9 @@ otherwise SQLite). Raw values are preserved in the accompanying CSV files.
 """
 
 from __future__ import annotations
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
 import argparse
 from pathlib import Path
@@ -21,9 +24,6 @@ from typing import Iterable
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
 
 
 WORKLOAD_LABELS = {
@@ -45,9 +45,11 @@ WORKLOAD_LABELS = {
 }
 
 ACID_WORKLOAD_LABELS = {"ACID A/C/I", "ACID Txn", "ACID Batch RMW"}
-CONCURRENT_WORKLOAD_LABELS = {"Concurrent Write (8T)", "Concurrent Session (8T)"}
+CONCURRENT_WORKLOAD_LABELS = {
+    "Concurrent Write (8T)", "Concurrent Session (8T)"}
 
-DATABASE_ORDER = ["leaves", "lmdb", "leveldb", "rocksdb", "wiredtiger", "sqlite", "redis", "badger", "dragonfly"]
+DATABASE_ORDER = ["leaves", "lmdb", "leveldb", "rocksdb",
+                  "wiredtiger", "sqlite", "redis", "badger", "dragonfly"]
 COLORS = {
     "leaves": "#15616d",
     "lmdb": "#2a9d8f",
@@ -89,19 +91,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def latest_file(directory: Path, pattern: str) -> Path | None:
-    matches = sorted(directory.glob(pattern))
-    if not matches:
-        return None
-    return matches[-1]
-
-
-def choose_input_file(explicit: str | None, directory: Path, pattern: str) -> Path | None:
-    if explicit:
-        return Path(explicit)
-    return latest_file(directory, pattern)
-
-
 def ordered_columns(columns: Iterable[str]) -> list[str]:
     columns = list(columns)
     preferred = [name for name in DATABASE_ORDER if name in columns]
@@ -131,11 +120,14 @@ def prepare_matrix(csv_path: Path) -> pd.DataFrame:
         frame["scenario"] = "baseline"
     if "batch_size" not in frame.columns:
         frame["batch_size"] = 1
-    frame["run_throughput_ops_sec"] = pd.to_numeric(frame["run_throughput_ops_sec"])
-    frame["workload_label"] = frame["workload"].map(WORKLOAD_LABELS).fillna(frame["workload"])
+    frame["run_throughput_ops_sec"] = pd.to_numeric(
+        frame["run_throughput_ops_sec"])
+    frame["workload_label"] = frame["workload"].map(
+        WORKLOAD_LABELS).fillna(frame["workload"])
     # Append " DW" suffix for dedicated_writer scenarios so they appear as separate bars
     dw_mask = frame["scenario"].str.endswith("_dw")
-    frame.loc[dw_mask, "workload_label"] = frame.loc[dw_mask, "workload_label"] + " DW"
+    frame.loc[dw_mask, "workload_label"] = frame.loc[dw_mask,
+                                                     "workload_label"] + " DW"
     return frame
 
 
@@ -228,7 +220,8 @@ def save_grouped_bars(
 
     # Reference line at y=1 for normalized charts
     if reference_db is not None:
-        ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.6)
+        ax.axhline(y=1.0, color="gray", linestyle="--",
+                   linewidth=1.0, alpha=0.6)
 
     if log_scale:
         # Ensure positive lower limit for log scale
@@ -283,7 +276,8 @@ def save_line_chart(
 
     # Reference line at y=1 for normalized charts
     if reference_db is not None:
-        ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1.0, alpha=0.6)
+        ax.axhline(y=1.0, color="gray", linestyle="--",
+                   linewidth=1.0, alpha=0.6)
 
     ax.set_title(title, fontsize=15, fontweight="bold")
     ax.set_ylabel(ylabel)
@@ -316,10 +310,11 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    throughput_csv = choose_input_file(args.throughput_csv, results_dir, "throughput_matrix_*.csv")
-
+    throughput_csv = Path(
+        results_dir, "throughput_matrix.csv" if args.throughput_csv is None else args.throughput_csv)
     if throughput_csv is None or not throughput_csv.exists():
-        raise SystemExit("No throughput_matrix CSV found. Run the benchmark matrix first.")
+        raise SystemExit(
+            "No throughput_matrix CSV found. Run the benchmark matrix first.")
 
     # Load full dataset
     throughput_df_all = prepare_matrix(throughput_csv)
@@ -341,7 +336,8 @@ def main() -> None:
         ref_db = choose_reference_db(base_run_pivot)
         comparison_chart = output_dir / "workload_comparison.png"
         save_grouped_bars(
-            normalize_pivot(base_run_pivot, ref_db) if ref_db else base_run_pivot,
+            normalize_pivot(
+                base_run_pivot, ref_db) if ref_db else base_run_pivot,
             comparison_chart,
             "Workload Performance (Baseline — Default Settings)",
             f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
@@ -354,10 +350,12 @@ def main() -> None:
     # -----------------------------------------------------------------------
     # 2. Batch scaling line chart — throughput vs batch size
     # -----------------------------------------------------------------------
-    batch_df = throughput_df_all[throughput_df_all["scenario"].str.match(r"^batch_(insert|update)_\d+$")]
+    batch_df = throughput_df_all[throughput_df_all["scenario"].str.match(
+        r"^batch_(insert|update)_\d+$")]
     if not batch_df.empty:
         batch_df["batch_size"] = pd.to_numeric(batch_df["batch_size"])
-        batch_df["batch_op"] = batch_df["scenario"].str.extract(r"^batch_(insert|update)", expand=False)
+        batch_df["batch_op"] = batch_df["scenario"].str.extract(
+            r"^batch_(insert|update)", expand=False)
 
         for op_type, op_label in [("insert", "Insert"), ("update", "Update")]:
             subset = batch_df[batch_df["batch_op"] == op_type]
@@ -376,7 +374,8 @@ def main() -> None:
             chart_name = f"batch_{op_type}_scaling.png"
             chart_path = output_dir / chart_name
             save_line_chart(
-                normalize_pivot(batch_pivot, ref_db) if ref_db else batch_pivot,
+                normalize_pivot(
+                    batch_pivot, ref_db) if ref_db else batch_pivot,
                 chart_path,
                 f"Batch {op_label} Scaling — Throughput vs Batch Size",
                 f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
@@ -389,9 +388,11 @@ def main() -> None:
     # -----------------------------------------------------------------------
     # 3. Value size scaling line chart — throughput vs value size
     # -----------------------------------------------------------------------
-    value_df = throughput_df_all[throughput_df_all["scenario"].str.match(r"^value_size_\d+$")]
+    value_df = throughput_df_all[throughput_df_all["scenario"].str.match(
+        r"^value_size_\d+$")]
     if not value_df.empty:
-        value_df["value_size"] = value_df["scenario"].str.extract(r"value_size_(\d+)", expand=False).astype(int)
+        value_df["value_size"] = value_df["scenario"].str.extract(
+            r"value_size_(\d+)", expand=False).astype(int)
         value_pivot = value_df.pivot_table(
             index="value_size",
             columns="database",
@@ -419,14 +420,17 @@ def main() -> None:
     # -----------------------------------------------------------------------
     # 4. ACID workloads — keep as separate chart (same as before)
     # -----------------------------------------------------------------------
-    acid_df = throughput_df_all[throughput_df_all["workload_label"].isin(ACID_WORKLOAD_LABELS)]
+    acid_df = throughput_df_all[throughput_df_all["workload_label"].isin(
+        ACID_WORKLOAD_LABELS)]
     if not acid_df.empty:
-        acid_run_pivot = acid_df.groupby(["workload_label", "database"])["run_throughput_ops_sec"].max().unstack(fill_value=0)
+        acid_run_pivot = acid_df.groupby(["workload_label", "database"])[
+            "run_throughput_ops_sec"].max().unstack(fill_value=0)
         acid_run_pivot = acid_run_pivot.loc[:, (acid_run_pivot > 0).any()]
         ref_db = choose_reference_db(acid_run_pivot)
         acid_chart = output_dir / "acid_workload_comparison.png"
         save_grouped_bars(
-            normalize_pivot(acid_run_pivot, ref_db) if ref_db else acid_run_pivot,
+            normalize_pivot(
+                acid_run_pivot, ref_db) if ref_db else acid_run_pivot,
             acid_chart,
             "ACID Workload Performance (Best Across All Scenarios)",
             f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
@@ -439,14 +443,18 @@ def main() -> None:
     # -----------------------------------------------------------------------
     # 5. Concurrent workloads — keep as separate chart (same as before)
     # -----------------------------------------------------------------------
-    concurrent_df = throughput_df_all[throughput_df_all["workload_label"].isin(CONCURRENT_WORKLOAD_LABELS)]
+    concurrent_df = throughput_df_all[throughput_df_all["workload_label"].isin(
+        CONCURRENT_WORKLOAD_LABELS)]
     if not concurrent_df.empty:
-        concurrent_run_pivot = concurrent_df.groupby(["workload_label", "database"])["run_throughput_ops_sec"].max().unstack(fill_value=0)
-        concurrent_run_pivot = concurrent_run_pivot.loc[:, (concurrent_run_pivot > 0).any()]
+        concurrent_run_pivot = concurrent_df.groupby(["workload_label", "database"])[
+            "run_throughput_ops_sec"].max().unstack(fill_value=0)
+        concurrent_run_pivot = concurrent_run_pivot.loc[:, (concurrent_run_pivot > 0).any(
+        )]
         ref_db = choose_reference_db(concurrent_run_pivot)
         concurrent_chart = output_dir / "concurrent_workload_comparison.png"
         save_grouped_bars(
-            normalize_pivot(concurrent_run_pivot, ref_db) if ref_db else concurrent_run_pivot,
+            normalize_pivot(concurrent_run_pivot,
+                            ref_db) if ref_db else concurrent_run_pivot,
             concurrent_chart,
             "Concurrent Workload Performance (8 threads)",
             f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
