@@ -330,7 +330,7 @@ def main() -> None:
             index="workload_label",
             columns="database",
             values="run_throughput_ops_sec",
-            aggfunc=trimmed_mean,
+            aggfunc="median",
             fill_value=0,
         )
         ref_db = choose_reference_db(base_run_pivot)
@@ -365,7 +365,7 @@ def main() -> None:
                 index="batch_size",
                 columns="database",
                 values="run_throughput_ops_sec",
-                aggfunc=trimmed_mean,
+                aggfunc="median",
                 fill_value=0,
             )
             # Sort by batch size ascending
@@ -397,7 +397,7 @@ def main() -> None:
             index="value_size",
             columns="database",
             values="run_throughput_ops_sec",
-            aggfunc=trimmed_mean,
+            aggfunc="median",
             fill_value=0,
         )
         value_pivot = value_pivot.sort_index()
