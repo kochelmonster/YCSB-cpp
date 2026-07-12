@@ -165,9 +165,15 @@ if (BIND_LEAVES)
     message(STATUS "BIND_LEAVES - ON")
     file(GLOB_RECURSE YCSB_LEAVES_SRC "adapters/leaves/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_LEAVES_SRC})
-    
-    # Leaves is header-only, so we just need to add include directory
-    target_include_directories(ycsb PRIVATE /home/michael/src/leaves/include)
+
+    if(DEFINED leaves_DIR AND EXISTS "${leaves_DIR}/leaves-targets.cmake")
+        find_package(leaves CONFIG REQUIRED)
+        target_link_libraries(ycsb PRIVATE leaves::leaves)
+        message(STATUS "Found Leaves package target")
+    else()
+        target_include_directories(ycsb PRIVATE /home/michael/src/leaves/include)
+        message(STATUS "Leaves package export not available; falling back to local include path")
+    endif()
 
     # Suppress pedantic and unused-parameter warnings for leaves headers/adapter
     if(NOT MSVC)
@@ -195,7 +201,7 @@ if (BIND_LEAVES)
         message(STATUS "Applied Debug flags to Leaves files: -DLEAVES_SINGLE_PROCESS -g -O0")
     endif()
     
-    message(STATUS "Found Leaves library (header-only)")
+    message(STATUS "Configured Leaves binding")
 else()
     message(STATUS "BIND_LEAVES - OFF")
 endif()
