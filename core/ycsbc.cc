@@ -126,10 +126,30 @@ int main(const int argc, const char* argv[]) {
     ycsbc::Dataset load_dataset(props, wl, 0, true);
     const bool force_generate =
         ycsbc::utils::StrToBool(props.GetProperty("force_generate", "false"));
-    struct stat buffer;
-    if (stat(load_dataset.GetFullPath(total_ops).c_str(), &buffer) != 0 ||
-        force_generate) {
+    const std::string load_dataset_path = load_dataset.GetFullPath(total_ops);
+    bool should_generate = false;
+    std::string reason;
+    if (force_generate) {
+      should_generate = true;
+      reason = "force_generate=true";
+    } else {
+      struct stat buffer;
+      if (stat(load_dataset_path.c_str(), &buffer) != 0) {
+        should_generate = true;
+        reason = "dataset file missing";
+      } else if (!load_dataset.IsValidForOpCount(total_ops)) {
+        should_generate = true;
+        reason = "dataset header count mismatch";
+      }
+    }
+
+    if (should_generate) {
+      std::cout << "Generating load dataset: " << reason << " ("
+                << load_dataset_path << ")" << std::endl;
       load_dataset.Generate(total_ops);
+    } else {
+      std::cout << "Reusing existing load dataset: " << load_dataset_path
+                << std::endl;
     }
     load_dataset.Open(total_ops);
 
@@ -186,11 +206,33 @@ int main(const int argc, const char* argv[]) {
         ycsbc::utils::StrToBool(props.GetProperty("force_generate", "false"));
     for (int i = 0; i < num_threads; ++i) {
       txn_datasets.emplace_back(new ycsbc::Dataset(props, wl, i, false));
-      struct stat buffer;
-      if (stat(txn_datasets.back()->GetFullPath(txn_thread_ops[i]).c_str(),
-               &buffer) != 0 ||
-          force_generate) {
+      ycsbc::Dataset& dataset = *txn_datasets.back();
+      const int thread_ops = txn_thread_ops[i];
+      const std::string dataset_path = dataset.GetFullPath(thread_ops);
+
+      bool should_generate = false;
+      std::string reason;
+      if (force_generate) {
+        should_generate = true;
+        reason = "force_generate=true";
+      } else {
+        struct stat buffer;
+        if (stat(dataset_path.c_str(), &buffer) != 0) {
+          should_generate = true;
+          reason = "dataset file missing";
+        } else if (!dataset.IsValidForOpCount(thread_ops)) {
+          should_generate = true;
+          reason = "dataset header count mismatch";
+        }
+      }
+
+      if (should_generate) {
+        std::cout << "Generating transaction dataset for thread " << i << ": "
+                  << reason << " (" << dataset_path << ")" << std::endl;
         txn_datasets.back()->Generate(txn_thread_ops[i]);
+      } else {
+        std::cout << "Reusing existing transaction dataset for thread " << i
+                  << ": " << dataset_path << std::endl;
       }
       //txn_datasets.back()->DEBUG(txn_thread_ops[i]);
       txn_datasets.back()->Open(txn_thread_ops[i]);

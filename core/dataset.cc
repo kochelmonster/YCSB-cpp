@@ -58,7 +58,17 @@ void Dataset::Open(int op_count) {
   if (map_ == MAP_FAILED) {
     throw utils::Exception("Failed to map file to memory");
   }
-  current_ = static_cast<char*>(map_);
+
+  if (size_ < sizeof(DatasetHeader)) {
+    throw utils::Exception("Dataset file is missing header");
+  }
+
+  const auto* header = static_cast<const DatasetHeader*>(map_);
+  if (header->item_count != static_cast<uint64_t>(op_count)) {
+    throw utils::Exception("Dataset header item count mismatch");
+  }
+
+  current_ = static_cast<char*>(map_) + sizeof(DatasetHeader);
 }
 
 void Dataset::Generate(int op_count) {
@@ -68,8 +78,50 @@ void Dataset::Generate(int op_count) {
     throw utils::Exception("Failed to open dataset file for writing");
   }
 
+  const DatasetHeader header{static_cast<uint64_t>(op_count)};
+  ofs.write(reinterpret_cast<const char*>(&header), sizeof(header));
   workload_.PrepareOpsForFile(ofs, op_count, is_loading_);
   ofs.close();
+}
+
+bool Dataset::IsValidForOpCount(int op_count) const {
+  if (op_count < 0) {
+    return false;
+  }
+
+  const std::string full_path = GetFullPath(op_count);
+  const int fd = open(full_path.c_str(), O_RDONLY);
+  if (fd == -1) {
+    return false;
+  }
+
+  struct stat sb;
+  if (fstat(fd, &sb) == -1 || sb.st_size < 0) {
+    close(fd);
+    return false;
+  }
+
+  if (static_cast<size_t>(sb.st_size) < sizeof(DatasetHeader)) {
+    close(fd);
+    return false;
+  }
+
+  DatasetHeader header{};
+  const ssize_t bytes_read = read(fd, &header, sizeof(header));
+  close(fd);
+  if (bytes_read != static_cast<ssize_t>(sizeof(header))) {
+    return false;
+  }
+
+  if (op_count < 0) {
+    return false;
+  }
+
+  if (header.item_count != static_cast<uint64_t>(op_count)) {
+    return false;
+  }
+
+  return true;
 }
 
 void Dataset::DEBUG(int op_count) {
@@ -101,10 +153,9 @@ void Dataset::DEBUG(int op_count) {
         break;
     }
 
-
     std::cout << "Testitem: " << i << ": " << type_str << " " << item.key.size() << " with "
               << values.size() << " fields" << "  size: " << values.data().size() << std::endl;
-      
+
 
     ReadonlyFields readonly(values);
     // check correctnes of the values
