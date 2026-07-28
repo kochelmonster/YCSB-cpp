@@ -40,6 +40,7 @@ hashalgo=sha256
 leaves.mapsize=274877906944
 leaves.format=confluence
 leaves.merge_threshold=128000
+leaves.heap_writeback_bytes=8388608
 
 # RocksDB: add a 2GB block cache.
 # 5M×1KB records = 5GB dataset; reads are only 10% of ops but still benefit

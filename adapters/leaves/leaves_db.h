@@ -21,7 +21,7 @@
 
 // Include Leaves database headers
 #include <leaves/confluence.hpp>
-#include <leaves/leaves.hpp>
+#include <leaves/mmap.hpp>
 
 namespace ycsbc {
 
@@ -61,8 +61,10 @@ class LeavesDB : public DB {
   Status Load(const std::string &table, Dataset &batch) override;
 
  private:
-  using SingleDB = leaves::TDB<leaves::MapStorage>;
+  using SingleDB = leaves::MapStorage::DB;
   using SingleCursor = SingleDB::Cursor;
+  using ConfluenceDB = leaves::MapStorage::ConfluenceDB;
+  using ConfluenceCursor = ConfluenceDB::Cursor;
 
   enum LeavesFormat {
     kSingleRow,
@@ -72,8 +74,8 @@ class LeavesDB : public DB {
 
   // Database instance management
   static std::shared_ptr<leaves::MapStorage> storage_;
-  static std::shared_ptr<SingleDB> single_db_;
-  static std::shared_ptr<leaves::MapConfluenceDB> confluence_db_;
+  static SingleDB single_db_;
+  static ConfluenceDB confluence_db_;
   static int ref_cnt_;
   static std::mutex mu_;
 
@@ -82,7 +84,7 @@ class LeavesDB : public DB {
   size_t batch_size_;
   size_t mapsize_;
   SingleCursor cursor_;
-  leaves::MapConfluenceCursor confluence_cursor_;
+  ConfluenceCursor confluence_cursor_;
   Fields updated_fields_;
   bool sync_ = false;
   bool wal_enabled_ = false;

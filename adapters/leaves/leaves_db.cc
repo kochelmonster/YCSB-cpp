@@ -47,8 +47,9 @@ const std::string PROP_WAL_DEFAULT = "false";
 namespace ycsbc {
 
 std::shared_ptr<leaves::MapStorage> LeavesDB::storage_(nullptr);
-std::shared_ptr<LeavesDB::SingleDB> LeavesDB::single_db_(nullptr);
-std::shared_ptr<leaves::MapConfluenceDB> LeavesDB::confluence_db_(nullptr);
+LeavesDB::SingleDB LeavesDB::single_db_{};
+LeavesDB::ConfluenceDB LeavesDB::confluence_db_{};
+
 int LeavesDB::ref_cnt_(0);
 std::mutex LeavesDB::mu_;
 
@@ -89,8 +90,7 @@ void LeavesDB::Init() {
     }
     // First instance initializes the storage
     try {
-      storage_ =
-          std::make_shared<leaves::MapStorage>(dbpath_.c_str(), mapsize_);
+      storage_ = leaves::MapStorage::create(dbpath_.c_str(), mapsize_);
       std::cout << "Leaves storage initialized: " << dbpath_ << std::endl;
     } catch (const std::exception& e) {
       std::cerr << "Failed to initialize Leaves storage: " << e.what()
@@ -101,8 +101,8 @@ void LeavesDB::Init() {
 
   if (format_ == kConfluence) {
     if (!confluence_db_) {
-      confluence_db_ =
-          std::make_shared<leaves::MapConfluenceDB>(storage_, "benchmark");
+      confluence_db_ = storage_->open<leaves::MapStorage::ConfluenceDB>(
+          "benchmark");
 
       uint32_t merge_threshold =
           static_cast<uint32_t>(std::stoul(props.GetProperty(
@@ -112,22 +112,22 @@ void LeavesDB::Init() {
               PROP_MAX_ATTACHED_AGE_MS, PROP_MAX_ATTACHED_AGE_MS_DEFAULT)));
 
       if (merge_threshold > 0) {
-        confluence_db_->set_merge_write_threshold(merge_threshold);
+        confluence_db_.set_merge_write_threshold(merge_threshold);
         std::cout << "Leaves merge_write_threshold set to " << merge_threshold
                   << std::endl;
       }
       if (max_attached_age_ms > 0) {
-        confluence_db_->set_max_attached_age_ms(max_attached_age_ms);
+        confluence_db_.set_max_attached_age_ms(max_attached_age_ms);
         std::cout << "Leaves max_attached_age_ms set to "
                   << max_attached_age_ms << std::endl;
       }
     }
-    confluence_cursor_ = confluence_db_->cursor();
+    confluence_cursor_ = confluence_db_.cursor();
   } else {
     if (!single_db_) {
-      single_db_ = std::make_shared<SingleDB>(storage_, "benchmark");
+      single_db_ = storage_->open("benchmark");
     }
-    cursor_ = single_db_->cursor();
+    cursor_ = single_db_.cursor();
   }
 }
 
@@ -163,21 +163,14 @@ void LeavesDB::Cleanup() {
   // This ensures the cursor's destructor (which calls back into _cdb)
   // runs before confluence_db_ / single_db_ is torn down below.
   if (format_ == kConfluence) {
-    confluence_cursor_ = leaves::MapConfluenceCursor{};
+    confluence_cursor_ = ConfluenceCursor{};
   } else {
     cursor_ = SingleCursor{};
   }
   ref_cnt_--;
   if (ref_cnt_ == 0) {
-    single_db_.reset();
-
-    if (confluence_db_) {
-      std::cout << "Tributary highwater at cleanup: "
-                << confluence_db_->_internal()->_tributaries_count.load(
-                       std::memory_order_relaxed)
-                << std::endl;
-    }
-    confluence_db_.reset();
+    single_db_ = SingleDB{};
+    confluence_db_ = ConfluenceDB{};
     storage_.reset();
     std::cout << "Leaves database closed" << std::endl;
   }
@@ -190,7 +183,7 @@ DB::Status LeavesDB::BeginTransaction() {
   if (format_ == kConfluence) {
     confluence_cursor_.start_transaction();
   } else if (batch_size_ > 1 || wal_enabled_) {
-    cursor_.start_transaction(true, wal_enabled_);
+    cursor_.start_transaction(false, wal_enabled_);
   }
 
   txn_active_ = true;
@@ -410,7 +403,7 @@ DB::Status LeavesDB::Load(const std::string& /*table*/, Dataset& batch) {
   try {
     // Use single cursor transaction for efficient bulk loading.
     if (format_ == kConfluence) {
-      cursor_ = confluence_db_->_internal_main().cursor();
+      cursor_ = confluence_db_._internal_main().cursor();
     }
 
     cursor_.start_transaction();

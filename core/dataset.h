@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <cstddef>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -14,6 +15,10 @@
 #include "utils/properties.h"
 
 namespace ycsbc {
+
+struct DatasetHeader {
+  uint64_t item_count;
+};
 
 struct Meta {
   uint64_t next_record_offset;
@@ -28,6 +33,7 @@ class Dataset {
 
   void Open(int op_count);
   void Generate(int op_count);
+  bool IsValidForOpCount(int op_count) const;
   std::string GetFullPath(int op_count) const;
   void DEBUG(int op_count);
 
