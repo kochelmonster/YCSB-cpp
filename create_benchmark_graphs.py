@@ -17,10 +17,11 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
 
 import argparse
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, cast
 
 import matplotlib
 matplotlib.use("Agg")
@@ -88,6 +89,12 @@ def parse_args() -> argparse.Namespace:
         default="benchmark_graphs",
         help="Directory for generated graph images",
     )
+    parser.add_argument(
+        "--repeat-aggregation",
+        choices=["median", "trimmed_mean"],
+        default="median",
+        help="Aggregation used to collapse repeat rows before charting.",
+    )
     return parser.parse_args()
 
 
@@ -120,6 +127,8 @@ def prepare_matrix(csv_path: Path) -> pd.DataFrame:
         frame["scenario"] = "baseline"
     if "batch_size" not in frame.columns:
         frame["batch_size"] = 1
+    if "repeat" in frame.columns:
+        frame["repeat"] = pd.to_numeric(frame["repeat"], errors="coerce")
     frame["run_throughput_ops_sec"] = pd.to_numeric(
         frame["run_throughput_ops_sec"])
     frame["workload_label"] = frame["workload"].map(
@@ -129,6 +138,30 @@ def prepare_matrix(csv_path: Path) -> pd.DataFrame:
     frame.loc[dw_mask, "workload_label"] = frame.loc[dw_mask,
                                                      "workload_label"] + " DW"
     return frame
+
+
+def aggregate_repeats(frame: pd.DataFrame, method: str = "median") -> pd.DataFrame:
+    """Aggregate raw repeat rows to one value per scenario/workload/database.
+
+    This keeps raw run-throughput rows in throughput_matrix.csv while moving
+    all statistical reduction into this graph generator.
+    """
+    group_cols = ["scenario", "batch_size", "workload", "database"]
+    grouped = frame.groupby(group_cols, as_index=False)["run_throughput_ops_sec"]
+    if method == "median":
+        aggregated = cast(pd.DataFrame, grouped.median())
+    elif method == "trimmed_mean":
+        aggregated = cast(pd.DataFrame, grouped.agg(trimmed_mean))
+    else:
+        raise ValueError(f"Unsupported repeat aggregation method: {method}")
+
+    aggregated["workload_label"] = aggregated["workload"].map(
+        WORKLOAD_LABELS).fillna(aggregated["workload"])
+    dw_mask = aggregated["scenario"].str.endswith("_dw")
+    aggregated.loc[dw_mask, "workload_label"] = (
+        aggregated.loc[dw_mask, "workload_label"] + " DW"
+    )
+    return aggregated
 
 
 def trimmed_mean(values: pd.Series) -> float:
@@ -317,7 +350,20 @@ def main() -> None:
             "No throughput_matrix CSV found. Run the benchmark matrix first.")
 
     # Load full dataset
-    throughput_df_all = prepare_matrix(throughput_csv)
+    throughput_df_all_raw = prepare_matrix(throughput_csv)
+    if args.repeat_aggregation == "trimmed_mean":
+        key_cols = ["scenario", "batch_size", "workload", "database"]
+        max_rows_per_key = int(throughput_df_all_raw.groupby(key_cols).size().max())
+        if max_rows_per_key <= 1:
+            print(
+                "Warning: --repeat-aggregation trimmed_mean selected, but input CSV has no repeat rows per key;"
+                " results will match median.",
+                file=sys.stderr,
+            )
+    throughput_df_all = aggregate_repeats(
+        throughput_df_all_raw,
+        method=args.repeat_aggregation,
+    )
 
     generated_files: list[Path] = []
 

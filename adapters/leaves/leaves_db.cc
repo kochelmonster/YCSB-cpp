@@ -183,7 +183,7 @@ DB::Status LeavesDB::BeginTransaction() {
   if (format_ == kConfluence) {
     confluence_cursor_.start_transaction();
   } else if (batch_size_ > 1 || wal_enabled_) {
-    cursor_.start_transaction(true, wal_enabled_);
+    cursor_.start_transaction(false, wal_enabled_);
   }
 
   txn_active_ = true;
