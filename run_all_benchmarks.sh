@@ -184,7 +184,7 @@ db_mode_args() {
                 if [ "$(scenario_batch_size "$scenario")" -eq 1 ]; then
                     echo "-p leaves.sync=true -p leaves.wal=false"
                 else
-                    echo "-p leaves.wal=false -p leaves.sync=true"
+                    echo "-p leaves.sync=true -p leaves.wal=false" # faster than wal=true
                 fi
                 ;;
             leveldb)
@@ -485,25 +485,30 @@ generate_matrix_csv() {
     local durability_csv="$RESULTS_DIR/durability_session_matrix_${TIMESTAMP}.csv"
     local i
 
-    echo "scenario,batch_size,workload,database,run_throughput_ops_sec" > "$throughput_csv"
+    echo "scenario,batch_size,workload,database,repeat,run_throughput_ops_sec" > "$throughput_csv"
     if [ "$MATRIX_MODE" = "durability" ]; then
-        echo "scenario,batch_size,workload,database,run_throughput_ops_sec" > "$durability_csv"
+        echo "scenario,batch_size,workload,database,repeat,run_throughput_ops_sec" > "$durability_csv"
     fi
 
     for ((i=0; i<${#ENTRY_DB[@]}; i++)); do
-        local run_tp
-        run_tp="${ENTRY_RUN_MEDIAN_TP[$i]}"
-        [ -z "$run_tp" ] && run_tp=$(extract_phase_throughput "${ENTRY_RUN_FILE[$i]}" "Run")
+        local run_tps repeat_idx run_tp
 
-        if [ -z "$run_tp" ]; then
-            continue
+        read -r -a run_tps <<< "${ENTRY_RUN_ALL_TPS[$i]}"
+        if [ "${#run_tps[@]}" -eq 0 ]; then
+            run_tp=$(extract_phase_throughput "${ENTRY_RUN_FILE[$i]}" "Run")
+            [ -n "$run_tp" ] && run_tps=("$run_tp")
         fi
 
-        echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${run_tp}" >> "$throughput_csv"
+        for ((repeat_idx=0; repeat_idx<${#run_tps[@]}; repeat_idx++)); do
+            run_tp="${run_tps[$repeat_idx]}"
+            [ -z "$run_tp" ] && continue
 
-        if [ "$MATRIX_MODE" = "durability" ] && [ "${ENTRY_SCENARIO[$i]}" = "baseline" ] && [ "${ENTRY_WORKLOAD[$i]}" = "workload_kv_session" ]; then
-            echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${run_tp}" >> "$durability_csv"
-        fi
+            echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},$((repeat_idx + 1)),${run_tp}" >> "$throughput_csv"
+
+            if [ "$MATRIX_MODE" = "durability" ] && [ "${ENTRY_SCENARIO[$i]}" = "baseline" ] && [ "${ENTRY_WORKLOAD[$i]}" = "workload_kv_session" ]; then
+                echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},$((repeat_idx + 1)),${run_tp}" >> "$durability_csv"
+            fi
+        done
     done
 
     echo "Matrix CSV saved to: $throughput_csv"
