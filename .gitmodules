@@ -1,3 +1,6 @@
 [submodule "HdrHistogram_c"]
 	path = HdrHistogram_c
 	url = https://github.com/HdrHistogram/HdrHistogram_c.git
+[submodule "external/leaves"]
+	path = external/leaves
+	url = https://github.com/kochelmonster/leaves.git
