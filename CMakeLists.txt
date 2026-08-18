@@ -166,13 +166,20 @@ if (BIND_LEAVES)
     file(GLOB_RECURSE YCSB_LEAVES_SRC "adapters/leaves/*.cc")
     target_sources(ycsb PRIVATE ${YCSB_LEAVES_SRC})
 
-    if(DEFINED leaves_DIR AND EXISTS "${leaves_DIR}/leaves-targets.cmake")
+    # ── Priority 1: Use leaves submodule if it exists
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/leaves/CMakeLists.txt")
+        message(STATUS "Configuring Leaves (via submodule at external/leaves)")
+        add_subdirectory(external/leaves)
+        target_link_libraries(ycsb PRIVATE leaves::leaves)
+    # ── Priority 2: Use explicit leaves_DIR if provided
+    elseif(DEFINED leaves_DIR AND EXISTS "${leaves_DIR}/leaves-targets.cmake")
+        message(STATUS "Configuring Leaves (via leaves_DIR package)")
         find_package(leaves CONFIG REQUIRED)
         target_link_libraries(ycsb PRIVATE leaves::leaves)
-        message(STATUS "Found Leaves package target")
+    # ── Priority 3: Fallback to include path from peer directory (backward compatibility)
     else()
-        target_include_directories(ycsb PRIVATE /home/michael/src/leaves/include)
-        message(STATUS "Leaves package export not available; falling back to local include path")
+        message(STATUS "Configuring Leaves (via peer directory ../leaves - fallback)")
+        target_include_directories(ycsb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../leaves/include)
     endif()
 
     # Suppress pedantic and unused-parameter warnings for leaves headers/adapter
