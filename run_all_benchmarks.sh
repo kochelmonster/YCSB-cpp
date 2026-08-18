@@ -6,13 +6,14 @@
 #   MATRIX_MODE=throughput  -> default engine settings
 #   MATRIX_MODE=durability  -> stricter durability-oriented settings
 #
-# Scenario coverage (Option 2 delivery):
+# Scenario coverage:
 #   - baseline
-#   - binary_key
 #   - batch_insert_{1,8,32,64}
 #   - batch_update_{1,8,32,64}
 #   - acid_aci
 #   - acid_txn
+#   - concurrent_write / concurrent_session
+#   - value_size_{100,1024,4096}
 
 set -e
 
@@ -22,8 +23,14 @@ RESULTS_DIR="./benchmark_results"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 MATRIX_MODE="${MATRIX_MODE:-throughput}"
 LOAD_BATCH_SIZE="${LOAD_BATCH_SIZE:-64}"
+BENCHMARK_REPEATS="${BENCHMARK_REPEATS:-1}"
+export YCSB_SEED=12345
 
-DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite" "redis")
+# Memory limit for each ycsb process (passed to systemd-run --scope as MemoryMax/MemorySwapMax).
+# Swap is prohibited by setting MemorySwapMax equal to MemoryMax.
+YCSB_MEMORY_LIMIT="${YCSB_MEMORY_LIMIT:-20G}"
+
+DATABASES=("rocksdb" "leveldb" "lmdb" "wiredtiger" "leaves" "sqlite" "redis" "badger")
 if [ -n "${BENCHMARK_DATABASES:-}" ]; then
     read -r -a DATABASES <<< "$BENCHMARK_DATABASES"
 fi
@@ -39,9 +46,9 @@ BASE_WORKLOADS=(
     "workload_kv_rmw"
 )
 
+
 SCENARIOS=(
     "baseline"
-    "binary_key"
     "batch_insert_1"
     "batch_insert_8"
     "batch_insert_32"
@@ -52,6 +59,12 @@ SCENARIOS=(
     "batch_update_64"
     "acid_aci"
     "acid_txn"
+    "acid_batch_rmw"
+    "concurrent_write"
+    "concurrent_session"
+    "value_size_100"
+    "value_size_1024"
+    "value_size_4096"
 )
 
 if [ -n "${BENCHMARK_SCENARIOS:-}" ]; then
@@ -79,42 +92,20 @@ echo "========================================"
 
 ENTRY_SCENARIO=()
 ENTRY_BATCH=()
-ENTRY_BINARY=()
 ENTRY_WORKLOAD=()
 ENTRY_DB=()
-ENTRY_LOAD_FILE=()
 ENTRY_RUN_FILE=()
-
-supports_binary_key() {
-    local db=$1
-    case "$db" in
-        leaves|lmdb|leveldb|rocksdb)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-supports_batch_size() {
-    supports_binary_key "$1"
-}
-
-scenario_binary_key() {
-    local scenario=$1
-    if [ "$scenario" = "binary_key" ]; then
-        echo "true"
-    else
-        echo "false"
-    fi
-}
+ENTRY_RUN_MEDIAN_TP=()
+ENTRY_RUN_ALL_TPS=()  # space-separated list of per-repeat throughputs
 
 scenario_batch_size() {
     local scenario=$1
     case "$scenario" in
         batch_insert_*|batch_update_*)
             echo "${scenario##*_}"
+            ;;
+        acid_batch_rmw)
+            echo "8"
             ;;
         *)
             echo "1"
@@ -131,7 +122,7 @@ scenario_workloads() {
     fi
 
     case "$scenario" in
-        baseline|binary_key)
+        baseline)
             echo "${BASE_WORKLOADS[*]}"
             ;;
         batch_insert_*)
@@ -146,6 +137,18 @@ scenario_workloads() {
         acid_txn)
             echo "workload_kv_acid_txn"
             ;;
+        acid_batch_rmw)
+            echo "workload_kv_acid_batch_rmw"
+            ;;
+    concurrent_write)
+        echo "workload_kv_concurrent_write"
+        ;;
+    concurrent_session)
+        echo "workload_kv_concurrent_session"
+        ;;
+    value_size_100|value_size_1024|value_size_4096)
+        echo "workload_kv_session"
+        ;;
         *)
             echo "${BASE_WORKLOADS[*]}"
             ;;
@@ -157,8 +160,12 @@ supports_scenario() {
     local scenario=$2
 
     case "$scenario" in
-        acid_txn)
-            [ "$db" = "wiredtiger" ] || [ "$db" = "lmdb" ] || [ "$db" = "leaves" ]
+        acid_txn|acid_aci|acid_batch_rmw)
+            [ "$db" = "wiredtiger" ] || [ "$db" = "lmdb" ] || [ "$db" = "leaves" ] || [ "$db" = "sqlite" ] || [ "$db" = "badger" ]
+            return
+            ;;
+        concurrent_write|concurrent_session)
+            [ "$db" != "leveldb" ] && [ "$db" != "lmdb" ]
             return
             ;;
         *)
@@ -171,10 +178,14 @@ db_mode_args() {
     local db=$1
     local scenario=$2
 
-    if [ "$MATRIX_MODE" = "durability" ] || [ "$scenario" = "acid_aci" ] || [ "$scenario" = "acid_txn" ]; then
+    if [ "$MATRIX_MODE" = "durability" ] || [ "$scenario" = "acid_aci" ] || [ "$scenario" = "acid_txn" ] || [ "$scenario" = "acid_batch_rmw" ]; then
         case "$db" in
             leaves)
-                echo "-p leaves.sync=true"
+                if [ "$(scenario_batch_size "$scenario")" -eq 1 ]; then
+                    echo "-p leaves.sync=true -p leaves.wal=false"
+                else
+                    echo "-p leaves.sync=true -p leaves.wal=false" # faster than wal=true
+                fi
                 ;;
             leveldb)
                 echo "-p leveldb.sync=true"
@@ -183,10 +194,16 @@ db_mode_args() {
                 echo "-p rocksdb.sync=true"
                 ;;
             lmdb)
-                echo "-p lmdb.nosync=false -p lmdb.nometasync=false -p lmdb.mapasync=false"
+                echo "-p lmdb.nosync=false -p lmdb.nometasync=false -p lmdb.mapasync=false -p lmdb.writemap=true"
                 ;;
             wiredtiger)
                 echo "-p wiredtiger.log.enabled=true -p wiredtiger.transaction_sync.enabled=true -p wiredtiger.transaction_sync.method=fsync"
+                ;;
+            sqlite)
+                echo "-p sqlite.journal_mode=WAL -p sqlite.synchronous=FULL"
+                ;;
+            badger)
+                echo "-p badger.sync_writes=true"
                 ;;
             *)
                 echo ""
@@ -197,47 +214,65 @@ db_mode_args() {
     fi
 }
 
+scenario_fieldlength() {
+    local scenario=$1
+    case "$scenario" in
+        value_size_100)
+            echo "100"
+            ;;
+        value_size_1024)
+            echo "1024"
+            ;;
+        value_size_4096)
+            echo "4096"
+            ;;
+        *)
+            echo "0"
+            ;;
+    esac
+}
+
 scenario_db_args() {
     local db=$1
     local scenario=$2
     local phase=${3:-run}
-    local binary_key
     local batch_size
-    binary_key=$(scenario_binary_key "$scenario")
+    local fieldlength
     batch_size=$(scenario_batch_size "$scenario")
+    fieldlength=$(scenario_fieldlength "$scenario")
 
-    if [ "$phase" = "load" ] && supports_batch_size "$db"; then
+    if [ "$phase" = "load" ]; then
         batch_size="$LOAD_BATCH_SIZE"
     fi
-
     if ! supports_scenario "$db" "$scenario"; then
         echo ""
         return 2
     fi
 
-    if [ "$binary_key" = "true" ] && ! supports_binary_key "$db"; then
-        echo ""
-        return 2
+    local fl_args=""
+    if [ "$fieldlength" -gt 0 ]; then
+        fl_args="-p fieldlength=${fieldlength} -p fieldcount=1"
     fi
 
-    if [[ "$scenario" == batch_* ]] && ! supports_batch_size "$db"; then
-        echo ""
-        return 2
+    local dw_args=""
+    if [[ "$scenario" == *_dw ]] && [ "$phase" = "run" ]; then
+        dw_args="-p dedicated_writer=true"
     fi
 
+    local bs_args=""
+    if [[ "$scenario" != concurrent_* ]]; then
+        bs_args="-p batch_size=${batch_size}"
+    fi
     case "$db" in
-        leaves|leveldb|rocksdb|lmdb)
-            echo "-p ${db}.binary_key=${binary_key} -p ${db}.batch_size=${batch_size}"
-            ;;
-        redis)
+        redis|dragonfly)
             if [ "$phase" = "load" ]; then
-                echo "-p redis.destroy=true"
+                echo "${bs_args} -p redis.destroy=true"
             else
-                echo "-p redis.destroy=false"
+                echo "${bs_args} -p redis.destroy=false ${dw_args}"
             fi
             ;;
         *)
-            echo ""
+            echo "${bs_args} ${fl_args} ${dw_args}"
             ;;
     esac
 
@@ -264,6 +299,9 @@ clean_db_path() {
             ;;
         sqlite)
             rm -f /tmp/ycsb-sqlite.db /tmp/ycsb-sqlite.db-wal /tmp/ycsb-sqlite.db-shm
+            ;;
+        badger)
+            rm -rf /tmp/ycsb-badger
             ;;
         *)
             ;;
@@ -298,6 +336,9 @@ append_db_size() {
         sqlite)
             db_path="/tmp/ycsb-sqlite.db"
             ;;
+        badger)
+            db_path="/tmp/ycsb-badger"
+            ;;
     esac
 
     if [ -n "$db_path" ] && [ -e "$db_path" ]; then
@@ -309,14 +350,29 @@ append_db_size() {
 
 LAST_OUTPUT_FILE=""
 
+memory_limit_wrapper() {
+    if [ -n "${YCSB_MEMORY_LIMIT:-}" ]; then
+        echo "systemd-run --user --scope -p MemoryMax=${YCSB_MEMORY_LIMIT} -p MemorySwapMax=0 --"
+    else
+        echo ""
+    fi
+}
+
+reset_swap() {
+    echo "Resetting swap before run phase..."
+    sudo swapoff -a
+    sudo swapon -a
+}
+
 run_benchmark() {
     local db=$1
     local scenario=$2
     local workload=$3
     local phase=$4
+    local repeat_suffix="${5:-}"
 
-    local output_file="$RESULTS_DIR/${db}_${scenario}_${workload}_${phase}_${TIMESTAMP}.log"
-    local properties_file="${db}/${db}.properties"
+    local output_file="$RESULTS_DIR/${db}_${scenario}_${workload}_${phase}${repeat_suffix}_${TIMESTAMP}.log"
+    local properties_file="adapters/${db}/${db}.properties"
     local cmd=()
     local mode_args=()
     local scenario_args=()
@@ -340,7 +396,15 @@ run_benchmark() {
 
     echo "Running $phase phase for $db with $workload (scenario=$scenario)..."
 
-    cmd=("$YCSB_BIN" "-$phase" "-db" "$db" "-P" "$properties_file" "-P" "$WORKLOADS_DIR/$workload")
+    local ml_wrapper
+    ml_wrapper=$(memory_limit_wrapper)
+    if [ -n "$ml_wrapper" ]; then
+        cmd=()
+        read -r -a cmd <<< "$ml_wrapper"
+        cmd+=("$YCSB_BIN" "-$phase" "-db" "$db" "-P" "$properties_file" "-P" "$WORKLOADS_DIR/$workload")
+    else
+        cmd=("$YCSB_BIN" "-$phase" "-db" "$db" "-P" "$properties_file" "-P" "$WORKLOADS_DIR/$workload")
+    fi
     if [ ${#COMMON_ARGS[@]} -gt 0 ]; then
         cmd+=("${COMMON_ARGS[@]}")
     fi
@@ -352,6 +416,7 @@ run_benchmark() {
     fi
     cmd+=("-s")
 
+    echo "Command: ${cmd[*]}"
     "${cmd[@]}" | tee "$output_file"
     append_db_size "$db" "$output_file"
 
@@ -367,12 +432,24 @@ extract_phase_throughput() {
     local file=$1
     local phase_label=$2
 
-    if [ ! -f "$file" ]; then
+    if [ ! -f "$file" ] || [ ! -s "$file" ]; then
         echo ""
         return
     fi
 
     sed -n "s/^${phase_label} throughput(ops\\/sec):[[:space:]]*//p" "$file" | tail -n1
+}
+
+compute_median() {
+    # Args: one or more numbers; prints their median.
+    printf '%s\n' "$@" | sort -n | awk '
+        BEGIN { c=0 }
+        { a[c++]=$1 }
+        END {
+            if (c==0) { print ""; exit }
+            if (c%2==1) print a[int(c/2)]
+            else printf "%.6g\n", (a[c/2-1]+a[c/2])/2
+        }'
 }
 
 summarize_results() {
@@ -388,8 +465,14 @@ summarize_results() {
 
     for ((i=0; i<${#ENTRY_DB[@]}; i++)); do
         echo "=== ${ENTRY_DB[$i]} | ${ENTRY_SCENARIO[$i]} | ${ENTRY_WORKLOAD[$i]} ===" >> "$summary_file"
-        grep -E "Load runtime|Load throughput|0 sec: .*\[INSERT:" "${ENTRY_LOAD_FILE[$i]}" >> "$summary_file" 2>/dev/null || true
         grep -E "Run runtime|Run throughput|0 sec: .*operations;" "${ENTRY_RUN_FILE[$i]}" >> "$summary_file" 2>/dev/null || true
+        if [ "$BENCHMARK_REPEATS" -gt 1 ] && [ -n "${ENTRY_RUN_ALL_TPS[$i]:-}" ]; then
+            read -r -a all_tps <<< "${ENTRY_RUN_ALL_TPS[$i]}"
+            local min_tp max_tp
+            min_tp=$(printf '%s\n' "${all_tps[@]}" | sort -n | head -1)
+            max_tp=$(printf '%s\n' "${all_tps[@]}" | sort -n | tail -1)
+            echo "Run repeats(n=${#all_tps[@]}): median=${ENTRY_RUN_MEDIAN_TP[$i]}  min=${min_tp}  max=${max_tp}  values=[${all_tps[*]}]" >> "$summary_file"
+        fi
         grep "Database size:" "${ENTRY_RUN_FILE[$i]}" >> "$summary_file" 2>/dev/null || true
         echo "" >> "$summary_file"
     done
@@ -398,30 +481,34 @@ summarize_results() {
 }
 
 generate_matrix_csv() {
-    local throughput_csv="$RESULTS_DIR/throughput_matrix_${TIMESTAMP}.csv"
+    local throughput_csv="$RESULTS_DIR/throughput_matrix.csv"
     local durability_csv="$RESULTS_DIR/durability_session_matrix_${TIMESTAMP}.csv"
     local i
 
-    echo "scenario,batch_size,binary_key,workload,database,load_throughput_ops_sec,run_throughput_ops_sec" > "$throughput_csv"
+    echo "scenario,batch_size,workload,database,repeat,run_throughput_ops_sec" > "$throughput_csv"
     if [ "$MATRIX_MODE" = "durability" ]; then
-        echo "scenario,batch_size,binary_key,workload,database,load_throughput_ops_sec,run_throughput_ops_sec" > "$durability_csv"
+        echo "scenario,batch_size,workload,database,repeat,run_throughput_ops_sec" > "$durability_csv"
     fi
 
     for ((i=0; i<${#ENTRY_DB[@]}; i++)); do
-        local load_tp
-        local run_tp
-        load_tp=$(extract_phase_throughput "${ENTRY_LOAD_FILE[$i]}" "Load")
-        run_tp=$(extract_phase_throughput "${ENTRY_RUN_FILE[$i]}" "Run")
+        local run_tps repeat_idx run_tp
 
-        if [ -z "$load_tp" ] || [ -z "$run_tp" ]; then
-            continue
+        read -r -a run_tps <<< "${ENTRY_RUN_ALL_TPS[$i]}"
+        if [ "${#run_tps[@]}" -eq 0 ]; then
+            run_tp=$(extract_phase_throughput "${ENTRY_RUN_FILE[$i]}" "Run")
+            [ -n "$run_tp" ] && run_tps=("$run_tp")
         fi
 
-        echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_BINARY[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${load_tp},${run_tp}" >> "$throughput_csv"
+        for ((repeat_idx=0; repeat_idx<${#run_tps[@]}; repeat_idx++)); do
+            run_tp="${run_tps[$repeat_idx]}"
+            [ -z "$run_tp" ] && continue
 
-        if [ "$MATRIX_MODE" = "durability" ] && [ "${ENTRY_SCENARIO[$i]}" = "baseline" ] && [ "${ENTRY_WORKLOAD[$i]}" = "workload_kv_session" ]; then
-            echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_BINARY[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},${load_tp},${run_tp}" >> "$durability_csv"
-        fi
+            echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},$((repeat_idx + 1)),${run_tp}" >> "$throughput_csv"
+
+            if [ "$MATRIX_MODE" = "durability" ] && [ "${ENTRY_SCENARIO[$i]}" = "baseline" ] && [ "${ENTRY_WORKLOAD[$i]}" = "workload_kv_session" ]; then
+                echo "${ENTRY_SCENARIO[$i]},${ENTRY_BATCH[$i]},${ENTRY_WORKLOAD[$i]},${ENTRY_DB[$i]},$((repeat_idx + 1)),${run_tp}" >> "$durability_csv"
+            fi
+        done
     done
 
     echo "Matrix CSV saved to: $throughput_csv"
@@ -429,6 +516,8 @@ generate_matrix_csv() {
         echo "Durability session CSV saved to: $durability_csv"
     fi
 }
+
+# ------- main loop -------
 
 echo "Starting comprehensive benchmark across ${#DATABASES[@]} databases and ${#SCENARIOS[@]} scenarios..."
 echo ""
@@ -450,23 +539,55 @@ for db in "${DATABASES[@]}"; do
                 continue
             fi
 
-            if ! run_benchmark "$db" "$scenario" "$workload" "load"; then
-                continue
-            fi
-            load_file="$LAST_OUTPUT_FILE"
+            run_tputs=()
+            last_run_file=""
+            for ((r=1; r<=BENCHMARK_REPEATS; r++)); do
+                # Check if this repeat already exists (for resume)
+                existing_run_log=$(ls -t "$RESULTS_DIR/${db}_${scenario}_${workload}_run_r${r}_"*.log 2>/dev/null | head -1)
+                if [ -n "$existing_run_log" ]; then
+                    _tp=$(extract_phase_throughput "$existing_run_log" "Run")
+                    if [ -n "$_tp" ]; then
+                        echo "Skipping already completed: $db $scenario $workload repeat $r"
+                        run_tputs+=("$_tp")
+                        [ -z "$last_run_file" ] && last_run_file="$existing_run_log"
+                        continue
+                    fi
+                fi
 
-            if ! run_benchmark "$db" "$scenario" "$workload" "run"; then
+            # First check if scenario is supported
+            if ! supports_scenario "$db" "$scenario"; then
+                echo "Skipping unsupported scenario '${scenario}' for db '${db}' (both load and run phases)"
                 continue
             fi
-            run_file="$LAST_OUTPUT_FILE"
+
+            # Clean database, load, then run (load log is discarded)
+            if ! run_benchmark "$db" "$scenario" "$workload" "load"; then
+                echo "WARNING: load phase failed for $db $scenario $workload"
+                continue 2
+            fi
+
+            reset_swap
+
+            repeat_suffix="_r${r}"
+            if ! run_benchmark "$db" "$scenario" "$workload" "run" "$repeat_suffix"; then
+                echo "WARNING: run phase failed for $db $scenario $workload (repeat $r)"
+                continue 2
+            fi
+                last_run_file="$LAST_OUTPUT_FILE"
+                tp=$(extract_phase_throughput "$last_run_file" "Run")
+                [ -n "$tp" ] && run_tputs+=("$tp")
+            done
+
+            [ "${#run_tputs[@]}" -eq 0 ] && continue
+            median_tp=$(compute_median "${run_tputs[@]}")
 
             ENTRY_SCENARIO+=("$scenario")
             ENTRY_BATCH+=("$(scenario_batch_size "$scenario")")
-            ENTRY_BINARY+=("$(scenario_binary_key "$scenario")")
             ENTRY_WORKLOAD+=("$workload")
             ENTRY_DB+=("$db")
-            ENTRY_LOAD_FILE+=("$load_file")
-            ENTRY_RUN_FILE+=("$run_file")
+            ENTRY_RUN_FILE+=("$last_run_file")
+            ENTRY_RUN_MEDIAN_TP+=("$median_tp")
+            ENTRY_RUN_ALL_TPS+=("${run_tputs[*]}")
 
             echo ""
         done
@@ -494,3 +615,4 @@ echo "ls -la $RESULTS_DIR"
 echo ""
 echo "To view summary:"
 echo "cat $RESULTS_DIR/benchmark_summary_${TIMESTAMP}.txt"
+paplay /usr/share/sounds/freedesktop/stereo/complete.oga

@@ -1,3 +1,4 @@
+
 //
 //  core_workload.cc
 //  YCSB-cpp
@@ -15,13 +16,26 @@
 #include "core_workload.h"
 #include "random_byte_generator.h"
 #include "utils/utils.h"
+#include "utils/sha256.h"
 
 #include <algorithm>
+#include <fstream>
 #include <random>
 #include <string>
+#include <unordered_set>
+
+#include "core/dataset.h"
 
 using ycsbc::CoreWorkload;
 using std::string;
+
+// Thread-local reusable buffers (moved from CoreWorkload members for thread-safety)
+static thread_local std::string tl_key_buffer;
+static thread_local ycsbc::Fields tl_result_buffer;
+static thread_local ycsbc::Fields tl_values_buffer;
+static thread_local std::unordered_set<std::string> tl_fields_buffer;
+static thread_local std::vector<ycsbc::Fields> tl_scan_result_buffer;
+static thread_local ycsbc::RandomByteGenerator tl_byte_generator;
 
 const char *ycsbc::kOperationString[ycsbc::MAXOPTYPE] = {
   "INSERT",
@@ -30,6 +44,9 @@ const char *ycsbc::kOperationString[ycsbc::MAXOPTYPE] = {
   "SCAN",
   "READMODIFYWRITE",
   "DELETE",
+  "BEGIN_TXN",
+  "COMMIT_TXN",
+  "ROLLBACK_TXN",
   "INSERT-FAILED",
   "READ-FAILED",
   "UPDATE-FAILED",
@@ -89,6 +106,9 @@ const string CoreWorkload::SCAN_LENGTH_DISTRIBUTION_DEFAULT = "uniform";
 const string CoreWorkload::INSERT_ORDER_PROPERTY = "insertorder";
 const string CoreWorkload::INSERT_ORDER_DEFAULT = "hashed";
 
+const string CoreWorkload::HASH_ALGO_PROPERTY = "hashalgo";
+const string CoreWorkload::HASH_ALGO_DEFAULT = "fnv";
+
 const string CoreWorkload::INSERT_START_PROPERTY = "insertstart";
 const string CoreWorkload::INSERT_START_DEFAULT = "0";
 
@@ -99,8 +119,8 @@ const std::string CoreWorkload::FIELD_NAME_PREFIX = "fieldnameprefix";
 const std::string CoreWorkload::FIELD_NAME_PREFIX_DEFAULT = "field";
 
 const std::string CoreWorkload::ZIPFIAN_CONST_PROPERTY = "zipfian_const";
-const std::string CoreWorkload::TRANSACTION_MODE_PROPERTY = "transactionmode";
-const std::string CoreWorkload::TRANSACTION_MODE_DEFAULT = "none";
+const std::string CoreWorkload::BATCH_SIZE_PROPERTY = "batch_size";
+const std::string CoreWorkload::BATCH_SIZE_DEFAULT = "1";
 
 namespace ycsbc {
 
@@ -111,20 +131,6 @@ void CoreWorkload::Init(const utils::Properties &p) {
   field_prefix_ = p.GetProperty(FIELD_NAME_PREFIX, FIELD_NAME_PREFIX_DEFAULT);
   field_len_generator_ = GetFieldLenGenerator(p);
 
-  // Reserve buffers to avoid reallocations in hot path
-  // Key buffer: typical key format is "user" + padded number, reserve for max size
-  key_buffer_.reserve(64);
-  
-  // Result and values buffers: reserve for field_count_ fields
-  result_buffer_.reserve(field_count_);
-  values_buffer_.reserve(field_count_);
-  
-  // Fields buffer: used when reading/filtering specific fields (typically 1-2 fields)
-  fields_buffer_.reserve(field_count_);
-  
-  // Scan result buffer: reserve for typical scan length (defaults to 1-1000, reserve for moderate size)
-  scan_result_buffer_.reserve(100);
-  
   // Pre-build field names to avoid string construction in hot path
   field_names_.reserve(field_count_);
   for (int i = 0; i < field_count_; ++i) {
@@ -152,7 +158,8 @@ void CoreWorkload::Init(const utils::Properties &p) {
   int insert_start = std::stoi(p.GetProperty(INSERT_START_PROPERTY, INSERT_START_DEFAULT));
 
   zero_padding_ = std::stoi(p.GetProperty(ZERO_PADDING_PROPERTY, ZERO_PADDING_DEFAULT));
-  explicit_transaction_mode_ = p.GetProperty(TRANSACTION_MODE_PROPERTY, TRANSACTION_MODE_DEFAULT) == "multikey_acid";
+  batch_size_ = std::stoi(p.GetProperty(BATCH_SIZE_PROPERTY, BATCH_SIZE_DEFAULT));
+  if (batch_size_ < 1) batch_size_ = 1;
 
   read_all_fields_ = utils::StrToBool(p.GetProperty(READ_ALL_FIELDS_PROPERTY,
                                                     READ_ALL_FIELDS_DEFAULT));
@@ -164,6 +171,8 @@ void CoreWorkload::Init(const utils::Properties &p) {
   } else {
     ordered_inserts_ = true;
   }
+
+  hash_algo_ = p.GetProperty(HASH_ALGO_PROPERTY, HASH_ALGO_DEFAULT);
 
 
   if (read_proportion > 0) {
@@ -217,6 +226,27 @@ void CoreWorkload::Init(const utils::Properties &p) {
   } else {
     throw utils::Exception("Distribution not allowed for scan length: " + scan_len_dist);
   }
+  properties_hash_ = GetPropertiesHash(p);
+}
+
+std::string CoreWorkload::GetPropertiesHash(const utils::Properties &p) {
+  std::string str_to_hash;
+  str_to_hash += p.GetProperty(READ_PROPORTION_PROPERTY, READ_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(UPDATE_PROPORTION_PROPERTY, UPDATE_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(INSERT_PROPORTION_PROPERTY, INSERT_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(SCAN_PROPORTION_PROPERTY, SCAN_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(READMODIFYWRITE_PROPORTION_PROPERTY, READMODIFYWRITE_PROPORTION_DEFAULT);
+  str_to_hash += p.GetProperty(REQUEST_DISTRIBUTION_PROPERTY, REQUEST_DISTRIBUTION_DEFAULT);
+  str_to_hash += p.GetProperty(MIN_SCAN_LENGTH_PROPERTY, MIN_SCAN_LENGTH_DEFAULT);
+  str_to_hash += p.GetProperty(MAX_SCAN_LENGTH_PROPERTY, MAX_SCAN_LENGTH_DEFAULT);
+  str_to_hash += p.GetProperty(SCAN_LENGTH_DISTRIBUTION_PROPERTY, SCAN_LENGTH_DISTRIBUTION_DEFAULT);
+  str_to_hash += p.GetProperty(INSERT_ORDER_PROPERTY, INSERT_ORDER_DEFAULT);
+  str_to_hash += p.GetProperty(HASH_ALGO_PROPERTY, HASH_ALGO_DEFAULT);
+
+  if (p.ContainsKey(ZIPFIAN_CONST_PROPERTY)) {
+    str_to_hash += p.GetProperty(ZIPFIAN_CONST_PROPERTY);
+  }
+  return sha256(str_to_hash);
 }
 
 ycsbc::Generator<uint64_t> *CoreWorkload::GetFieldLenGenerator(
@@ -237,22 +267,29 @@ ycsbc::Generator<uint64_t> *CoreWorkload::GetFieldLenGenerator(
 
 std::string CoreWorkload::BuildKeyName(uint64_t key_num) {
   if (!ordered_inserts_) {
-    key_num = utils::Hash(key_num);
+    if (hash_algo_ == "sha256") {
+      char num_buf[32];
+      snprintf(num_buf, sizeof(num_buf), "%lu", key_num);
+      sha256bin(num_buf, tl_key_buffer);
+      return tl_key_buffer;
+    } else { // fnv
+      key_num = utils::Hash(key_num);
+    }
   }
   
-  // Build key directly in key_buffer_ to avoid temporary string allocations
-  key_buffer_.clear();
-  key_buffer_.append("user");
+  // Build key directly in thread-local buffer to avoid allocations
+  tl_key_buffer.clear();
+  tl_key_buffer.append("user");
   
   // Convert key_num to string and calculate padding
   char num_buf[32];
   int num_len = snprintf(num_buf, sizeof(num_buf), "%lu", key_num);
   
   int fill = std::max(0, zero_padding_ - num_len);
-  key_buffer_.append(fill, '0');
-  key_buffer_.append(num_buf, num_len);
+  tl_key_buffer.append(fill, '0');
+  tl_key_buffer.append(num_buf, num_len);
   
-  return key_buffer_;
+  return tl_key_buffer;
 }
 
 void CoreWorkload::BuildValues(Fields &values) {
@@ -265,7 +302,7 @@ void CoreWorkload::BuildValues(Fields &values) {
     // Build value string
     std::string field_value;
     field_value.reserve(len);
-    std::generate_n(std::back_inserter(field_value), len, [this]() { return byte_generator_.Next(); });
+    std::generate_n(std::back_inserter(field_value), len, []() { return tl_byte_generator.Next(); });
     
     values.push(field_name, field_value);
   }
@@ -279,7 +316,7 @@ void CoreWorkload::BuildSingleValue(Fields &values) {
   // Build value string
   std::string field_value;
   field_value.reserve(len);
-  std::generate_n(std::back_inserter(field_value), len, [this]() { return byte_generator_.Next(); });
+  std::generate_n(std::back_inserter(field_value), len, []() { return tl_byte_generator.Next(); });
   
   values.push(field_name, field_value);
 }
@@ -298,17 +335,13 @@ const std::string& CoreWorkload::NextFieldName() {
 }
 
 bool CoreWorkload::DoInsert(DB &db) {
-  key_buffer_ = BuildKeyName(insert_key_sequence_->Next());
-  values_buffer_.clear();
-  BuildValues(values_buffer_);
-  return db.Insert(table_name_, key_buffer_, values_buffer_) == DB::kOK;
+  BuildKeyName(insert_key_sequence_->Next());
+  tl_values_buffer.clear();
+  BuildValues(tl_values_buffer);
+  return db.Insert(table_name_, tl_key_buffer, tl_values_buffer) == DB::kOK;
 }
 
 bool CoreWorkload::DoTransaction(DB &db) {
-  if (explicit_transaction_mode_) {
-    return TransactionMultiKeyAcid(db) == DB::kOK;
-  }
-
   DB::Status status;
   switch (op_chooser_.Next()) {
     case READ:
@@ -334,125 +367,178 @@ bool CoreWorkload::DoTransaction(DB &db) {
 
 DB::Status CoreWorkload::TransactionRead(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  key_buffer_ = BuildKeyName(key_num);
-  result_buffer_.clear();
+  BuildKeyName(key_num);
+  tl_result_buffer.clear();
   if (!read_all_fields()) {
-    fields_buffer_.clear();
-    fields_buffer_.insert(NextFieldName());
-    return db.Read(table_name_, key_buffer_, &fields_buffer_, result_buffer_);
+    tl_fields_buffer.clear();
+    tl_fields_buffer.insert(NextFieldName());
+    return db.Read(table_name_, tl_key_buffer, &tl_fields_buffer, tl_result_buffer);
   } else {
-    return db.Read(table_name_, key_buffer_, NULL, result_buffer_);
+    return db.Read(table_name_, tl_key_buffer, NULL, tl_result_buffer);
   }
 }
 
 DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  key_buffer_ = BuildKeyName(key_num);
-  result_buffer_.clear();
+  BuildKeyName(key_num);
+  tl_result_buffer.clear();
 
   if (!read_all_fields()) {
-    fields_buffer_.clear();
-    fields_buffer_.insert(NextFieldName());
-    db.Read(table_name_, key_buffer_, &fields_buffer_, result_buffer_);
+    tl_fields_buffer.clear();
+    tl_fields_buffer.insert(NextFieldName());
+    db.Read(table_name_, tl_key_buffer, &tl_fields_buffer, tl_result_buffer, true);
   } else {
-    db.Read(table_name_, key_buffer_, NULL, result_buffer_);
+    db.Read(table_name_, tl_key_buffer, NULL, tl_result_buffer, true);
   }
 
-  values_buffer_.clear();
+  tl_values_buffer.clear();
   if (write_all_fields()) {
-    BuildValues(values_buffer_);
+    BuildValues(tl_values_buffer);
   } else {
-    BuildSingleValue(values_buffer_);
+    BuildSingleValue(tl_values_buffer);
   }
-  return db.Update(table_name_, key_buffer_, values_buffer_);
+  return db.Update(table_name_, tl_key_buffer, tl_values_buffer);
 }
 
 DB::Status CoreWorkload::TransactionScan(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  key_buffer_ = BuildKeyName(key_num);
+  BuildKeyName(key_num);
   int len = scan_len_chooser_->Next();
-  scan_result_buffer_.clear();
+  tl_scan_result_buffer.clear();
   if (!read_all_fields()) {
-    fields_buffer_.clear();
-    fields_buffer_.insert(NextFieldName());
-    return db.Scan(table_name_, key_buffer_, len, &fields_buffer_, scan_result_buffer_);
+    tl_fields_buffer.clear();
+    tl_fields_buffer.insert(NextFieldName());
+    return db.Scan(table_name_, tl_key_buffer, len, &tl_fields_buffer, tl_scan_result_buffer);
   } else {
-    return db.Scan(table_name_, key_buffer_, len, NULL, scan_result_buffer_);
+    return db.Scan(table_name_, tl_key_buffer, len, NULL, tl_scan_result_buffer);
   }
 }
 
 DB::Status CoreWorkload::TransactionUpdate(DB &db) {
   uint64_t key_num = NextTransactionKeyNum();
-  key_buffer_ = BuildKeyName(key_num);
-  values_buffer_.clear();
+  BuildKeyName(key_num);
+  tl_values_buffer.clear();
   if (write_all_fields()) {
-    BuildValues(values_buffer_);
+    BuildValues(tl_values_buffer);
   } else {
-    BuildSingleValue(values_buffer_);
+    BuildSingleValue(tl_values_buffer);
   }
-  return db.Update(table_name_, key_buffer_, values_buffer_);
+  return db.Update(table_name_, tl_key_buffer, tl_values_buffer);
 }
 
 DB::Status CoreWorkload::TransactionInsert(DB &db) {
   uint64_t key_num = transaction_insert_key_sequence_->Next();
-  key_buffer_ = BuildKeyName(key_num);
-  values_buffer_.clear();
-  BuildValues(values_buffer_);
-  DB::Status s = db.Insert(table_name_, key_buffer_, values_buffer_);
+  BuildKeyName(key_num);
+  tl_values_buffer.clear();
+  BuildValues(tl_values_buffer);
+  DB::Status s = db.Insert(table_name_, tl_key_buffer, tl_values_buffer);
   transaction_insert_key_sequence_->Acknowledge(key_num);
   return s;
 }
 
-DB::Status CoreWorkload::TransactionMultiKeyAcid(DB &db) {
-  uint64_t first_key_num = NextTransactionKeyNum();
-  uint64_t second_key_num;
-  do {
-    second_key_num = NextTransactionKeyNum();
-  } while (record_count_ > 1 && second_key_num == first_key_num);
+void CoreWorkload::PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading) {
+  struct WorkItemLocal {
+    WorkItem::OpType type;
+    std::string key;
+    Fields values;
+    int scan_len{0};
+  };
 
-  std::string first_key = BuildKeyName(first_key_num);
-  std::string second_key = BuildKeyName(second_key_num);
+  WorkItemLocal item;
+  for (int i = 0; i < n; ++i) {
+    if (is_loading) {
+      item.type = WorkItem::OpType::INSERT;
+      item.key = BuildKeyName(insert_key_sequence_->Next());
+      BuildValues(item.values);
+    } else {
+      switch (op_chooser_.Next()) {
+        case READ:
+          item.type = WorkItem::OpType::READ;
+          item.key = BuildKeyName(NextTransactionKeyNum());
+          item.values.clear();
+          break;
+        case UPDATE:
+          item.type = WorkItem::OpType::UPDATE;
+          item.key = BuildKeyName(NextTransactionKeyNum());
+          if (write_all_fields_) BuildValues(item.values);
+          else BuildSingleValue(item.values);
+          break;
+        case INSERT: {
+          item.type = WorkItem::OpType::INSERT;
+          uint64_t key_num = transaction_insert_key_sequence_->Next();
+          item.key = BuildKeyName(key_num);
+          BuildValues(item.values);
+          transaction_insert_key_sequence_->Acknowledge(key_num);
+          break;
+        }
+        case SCAN:
+          item.type = WorkItem::OpType::SCAN;
+          item.key = BuildKeyName(NextTransactionKeyNum());
+          item.scan_len = scan_len_chooser_->Next();
+          item.values.clear();
+          break;
+        case READMODIFYWRITE:
+          item.type = WorkItem::OpType::READMODIFYWRITE;
+          item.key = BuildKeyName(NextTransactionKeyNum());
+          if (write_all_fields_) BuildValues(item.values);
+          else BuildSingleValue(item.values);
+          break;
+        default:
+          throw utils::Exception("Operation request is not recognized!");
+      }
+    }
 
-  DB::Status status = db.BeginTransaction();
-  if (status != DB::kOK) {
-    return status;
+    uint32_t key_len = item.key.length();
+    uint32_t op_specific_data_len = 0;
+    switch (item.type) {
+      case WorkItem::OpType::INSERT:
+      case WorkItem::OpType::UPDATE:
+      case WorkItem::OpType::READMODIFYWRITE: {
+        const std::string& buffer = item.values.buffer();
+        op_specific_data_len += sizeof(uint32_t) + buffer.size();
+        break;
+      }
+      case WorkItem::OpType::SCAN: {
+        op_specific_data_len += sizeof(uint32_t);
+        break;
+      }
+      default:
+        break;
+    }
+
+    Meta meta;
+    meta.key_offset = ofs.tellp();
+    meta.key_offset += sizeof(char) + sizeof(uint64_t) + sizeof(Meta);
+    meta.op_specific_data_offset = meta.key_offset + sizeof(uint32_t) + key_len;
+    meta.next_record_offset = meta.op_specific_data_offset + op_specific_data_len;
+    
+    ofs.put(static_cast<char>(item.type));
+    uint64_t meta_len = sizeof(Meta);
+    ofs.write(reinterpret_cast<const char*>(&meta_len), sizeof(meta_len));
+    ofs.write(reinterpret_cast<const char*>(&meta), sizeof(meta));
+
+    ofs.write(reinterpret_cast<const char*>(&key_len), sizeof(key_len));
+    ofs.write(item.key.data(), key_len);
+
+    switch (item.type) {
+      case WorkItem::OpType::INSERT:
+      case WorkItem::OpType::UPDATE:
+      case WorkItem::OpType::READMODIFYWRITE: {
+        const std::string& buffer = item.values.buffer();
+        uint32_t fields_size = buffer.size();
+        ofs.write(reinterpret_cast<const char*>(&fields_size), sizeof(fields_size));
+        ofs.write(buffer.data(), fields_size);
+        break;
+      }
+      case WorkItem::OpType::SCAN: {
+        ofs.write(reinterpret_cast<const char*>(&item.scan_len), sizeof(item.scan_len));
+        break;
+      }
+      default:
+        break;
+    }
   }
-
-  result_buffer_.clear();
-  status = db.Read(table_name_, first_key, NULL, result_buffer_);
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-    return status;
-  }
-
-  Fields second_result;
-  status = db.Read(table_name_, second_key, NULL, second_result);
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-    return status;
-  }
-
-  values_buffer_.clear();
-  BuildSingleValue(values_buffer_);
-  status = db.Update(table_name_, first_key, values_buffer_);
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-    return status;
-  }
-
-  Fields second_update;
-  BuildSingleValue(second_update);
-  status = db.Update(table_name_, second_key, second_update);
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-    return status;
-  }
-
-  status = db.CommitTransaction();
-  if (status != DB::kOK) {
-    db.RollbackTransaction();
-  }
-  return status;
 }
 
 } // ycsbc
+

@@ -18,11 +18,13 @@
 #include "discrete_generator.h"
 #include "counter_generator.h"
 #include "acknowledged_counter_generator.h"
-#include "random_byte_generator.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
+#include "utils/fields.h"
 
 namespace ycsbc {
+
+class Dataset;
 
 enum Operation {
   INSERT = 0,
@@ -31,6 +33,9 @@ enum Operation {
   SCAN,
   READMODIFYWRITE,
   DELETE,
+  BEGIN_TXN,
+  COMMIT_TXN,
+  ROLLBACK_TXN,
   INSERT_FAILED,
   READ_FAILED,
   UPDATE_FAILED,
@@ -153,6 +158,9 @@ class CoreWorkload {
   static const std::string INSERT_ORDER_PROPERTY;
   static const std::string INSERT_ORDER_DEFAULT;
 
+  static const std::string HASH_ALGO_PROPERTY;
+  static const std::string HASH_ALGO_DEFAULT;
+
   static const std::string INSERT_START_PROPERTY;
   static const std::string INSERT_START_DEFAULT;
 
@@ -170,8 +178,8 @@ class CoreWorkload {
   ///
   static const std::string ZIPFIAN_CONST_PROPERTY;
 
-  static const std::string TRANSACTION_MODE_PROPERTY;
-  static const std::string TRANSACTION_MODE_DEFAULT;
+  static const std::string BATCH_SIZE_PROPERTY;
+  static const std::string BATCH_SIZE_DEFAULT;
 
   ///
   /// Initialize the scenario.
@@ -182,6 +190,23 @@ class CoreWorkload {
   virtual bool DoInsert(DB &db);
   virtual bool DoTransaction(DB &db);
 
+  // Pre-generate n operations (keys + values) outside the timed window.
+  // is_loading=true uses the load-phase insert key sequence;
+  // is_loading=false uses the transaction-phase op chooser.
+  // Call this from the main thread before timer.Start(); pass the resulting
+  // vector to ClientThread so the hot loop only calls DB methods.
+  struct WorkItem {
+    enum class OpType { INSERT, UPDATE, READ, SCAN, READMODIFYWRITE };
+    OpType type;
+    Slice key;
+    ReadonlyFields values;
+    int scan_len{0};
+  };
+
+  void PrepareOpsForFile(std::ofstream& ofs, int n, bool is_loading);
+
+  const std::string &table_name() const { return table_name_; }
+
   bool read_all_fields() const { return read_all_fields_; }
   bool write_all_fields() const { return write_all_fields_; }
 
@@ -190,7 +215,7 @@ class CoreWorkload {
       field_len_generator_(nullptr), key_chooser_(nullptr), field_chooser_(nullptr),
       scan_len_chooser_(nullptr), insert_key_sequence_(nullptr),
       transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), record_count_(0),
-      explicit_transaction_mode_(false) {
+      batch_size_(1) {
   }
 
   virtual ~CoreWorkload() {
@@ -202,8 +227,13 @@ class CoreWorkload {
     delete transaction_insert_key_sequence_;
   }
 
+  const std::string &GetPropertiesHash() const { return properties_hash_; }
+
+  int batch_size() const { return batch_size_; }
+
  protected:
   static Generator<uint64_t> *GetFieldLenGenerator(const utils::Properties &p);
+  std::string GetPropertiesHash(const utils::Properties &p);
   std::string BuildKeyName(uint64_t key_num);
   void BuildValues(Fields &values);
   void BuildSingleValue(Fields &update);
@@ -216,7 +246,6 @@ class CoreWorkload {
   DB::Status TransactionScan(DB &db);
   DB::Status TransactionUpdate(DB &db);
   DB::Status TransactionInsert(DB &db);
-  DB::Status TransactionMultiKeyAcid(DB &db);
 
   std::string table_name_;
   int field_count_;
@@ -231,22 +260,14 @@ class CoreWorkload {
   CounterGenerator *insert_key_sequence_; // load insert key gen
   AcknowledgedCounterGenerator *transaction_insert_key_sequence_; // transaction insert key gen
   bool ordered_inserts_;
+  std::string hash_algo_;
   size_t record_count_;
   int zero_padding_;
-  bool explicit_transaction_mode_;
-  
-  // Reusable buffers to avoid allocations in hot path
-  std::string key_buffer_;
-  Fields result_buffer_;
-  Fields values_buffer_;
-  std::unordered_set<std::string> fields_buffer_;
-  std::vector<Fields> scan_result_buffer_;
+  int batch_size_;
+  std::string properties_hash_;
   
   // Pre-built field names to avoid string construction in hot path
   std::vector<std::string> field_names_;
-  
-  // Reusable random byte generator
-  RandomByteGenerator byte_generator_;
 };
 
 } // ycsbc

@@ -18,4 +18,6 @@ scanproportion=0
 insertproportion=0
 
 requestdistribution=zipfian
+insertorder=hashed
+hashalgo=sha256
 

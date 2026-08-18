@@ -1,19 +1,23 @@
 # YCSB-cpp Application Workload: Explicit Multi-Key Transaction Mix
-# Each transaction reads two keys and updates both inside a database transaction.
-# The operation count therefore represents committed transaction attempts.
+# Each batch groups multiple operations inside a database transaction.
+# With batch_size=2 and 50/50 read/update, each transaction typically
+# performs one read and one update, exercising multi-key ACID semantics.
+# The operation count represents individual operations (half as many transactions).
 
-recordcount=100000
-operationcount=50000
+recordcount=1000000
+operationcount=10000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
 readallfields=true
 writeallfields=false
 
-readproportion=0
-updateproportion=0
+readproportion=0.50
+updateproportion=0.50
 scanproportion=0
 insertproportion=0
 readmodifywriteproportion=0
 
+batch_size=2
 requestdistribution=zipfian
-transactionmode=multikey_acid
+insertorder=hashed
+hashalgo=sha256

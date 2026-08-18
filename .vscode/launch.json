@@ -5,51 +5,18 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug YCSB - Leaves Workload A (Load)",
+            "name": "Debug YCSB - LMDB Workload KV Session",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build-debug/ycsb",
             "args": [
-                "-db",
-                "leaves",
-                "-P",
-                "leaves/leaves.properties",
-                "-P",
-                "workloads/workloada",
-                "-load",
-                "-s"
-            ],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Set Disassembly Flavor to Intel",
-                    "text": "-gdb-set disassembly-flavor intel",
-                    "ignoreFailures": true
-                }
-            ]
-        },
-        {
-            "name": "Debug YCSB - Leaves Workload B (Run)",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build-debug/ycsb",
-            "args": [
-                "-db",
-                "leaves",
-                "-P",
-                "leaves/leaves.properties",
-                "-P",
-                "workloads/workloadb",
                 "-run",
+                "-db",
+                "lmdb",
+                "-P",
+                "adapters/lmdb/lmdb.properties",
+                "-P",
+                "./workloads/workload_kv_rmw",
                 "-s"
             ],
             "stopAtEntry": false,
@@ -71,19 +38,18 @@
             ]
         },
         {
-            "name": "Debug YCSB - Catch Exceptions (Leaves Workload A)",
+            "name": "Debug YCSB - Leaves -acid",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build-debug/ycsb",
             "args": [
+                "-run",
                 "-db",
                 "leaves",
                 "-P",
-                "leaves/leaves.properties",
+                "adapters/leaves/leaves.properties",
                 "-P",
-                "workloads/workloada",
-                "-load",
-                "-s"
+                "./workloads/workload_kv_concurrent_write"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -119,13 +85,13 @@
             "request": "launch",
             "program": "${workspaceFolder}/build-debug/ycsb",
             "args": [
+                "-load",
                 "-db",
                 "leaves",
                 "-P",
-                "leaves/leaves.properties",
+                "adapters/leaves/leaves.properties",
                 "-P",
-                "workloads/workloada",
-                "-run",
+                "./workloads/workload_kv_concurrent_session",
                 "-s"
             ],
             "stopAtEntry": false,
@@ -158,6 +124,60 @@
             "preLaunchTask": ""
         },
         {
+            "name": "Debug YCSB - Leaves FillRandom Like DbBench",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-debug/ycsb",
+            "args": [
+                "-run",
+                "-db",
+                "leaves",
+                "-P",
+                "adapters/leaves/leaves.properties",
+                "-P",
+                "workloads/workload_kv_fillrandom_like_dbbench.properties",
+                "-s"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Disable debuginfod symbol server",
+                    "text": "-gdb-set debuginfod enabled off",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Catch C++ exceptions",
+                    "text": "catch throw",
+                    "ignoreFailures": false
+                },
+                {
+                    "description": "Break on std::bad_weak_ptr",
+                    "text": "catch throw std::bad_weak_ptr",
+                    "ignoreFailures": false
+                }
+            ],
+            "preLaunchTask": "Build YCSB Debug"
+        },
+        {
             "name": "Debug YCSB - Release Build (Leaves Load)",
             "type": "cppdbg",
             "request": "launch",
@@ -166,7 +186,7 @@
                 "-db",
                 "leaves",
                 "-P",
-                "leaves/leaves.properties",
+                "adapters/leaves/leaves.properties",
                 "-P",
                 "workloads/workloada",
                 "-load",
@@ -204,7 +224,7 @@
                 "-db",
                 "leaves",
                 "-P",
-                "leaves/leaves.properties",
+                "adapters/leaves/leaves.properties",
                 "-P",
                 "workloads/workloada",
                 "-run",

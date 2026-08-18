@@ -1,0 +1,46 @@
+# YCSB-cpp ACID Workload: Batch Read-Modify-Write (Multi-Key RMW)
+# Each transaction performs batch_size=8 read-modify-write operations
+# atomically, exercising multi-key atomicity and rollback semantics.
+# Real-world pattern:
+#   - Fund transfers across accounts
+#   - Atomic inventory adjustments across multiple SKUs
+#   - Multi-document patching in one transaction
+# batch_size=8 means 8 RMW pairs per transaction (16 DB calls total)
+# Each RMW: read current value, then write updated value.
+#
+# Read/RMW ratio: 0/100
+# Request distribution: zipfian
+#
+# With batch_size=8 and operationcount=10000:
+#   ~1250 transactions (each with 8 RMW ops = 16 DB calls)
+
+recordcount=1000000
+operationcount=10000
+workload=com.yahoo.ycsb.workloads.CoreWorkload
+
+readallfields=true
+
+readproportion=0
+updateproportion=0
+scanproportion=0
+insertproportion=0
+readmodifywriteproportion=1.0
+
+batch_size=8
+requestdistribution=zipfian
+insertorder=hashed
+hashalgo=sha256
+
+# RocksDB / LevelDB: increase block cache to cover the full 1M-record dataset (~1GB).
+rocksdb.cache_size=1073741824
+leveldb.cache_size=1073741824
+
+# WiredTiger: switch from LSM to BTree.
+# 100% RMW — every operation reads then writes. BTree in-place updates avoid
+# LSM write amplification, and point reads need no bloom-filter fan-out.
+wiredtiger.blk_mgr.bloom_bit_count=
+wiredtiger.blk_mgr.bloom_hash_count=
+wiredtiger.blk_mgr.chunk_max=
+wiredtiger.blk_mgr.chunk_size=
+wiredtiger.lsm_mgr.merge=
+wiredtiger.lsm_mgr.max_workers=

@@ -7,6 +7,55 @@ This is a fork of [YCSB-C](https://github.com/basicthinker/YCSB-C) with the foll
  * Modified workloads to be more similar to the original YCSB
  * Supported databases: LevelDB, RocksDB, LMDB, WiredTiger, SQLite, Redis, Leaves
 
+## Differences from original Upstream master
+
+while executing benchmarks I noticed that the Benchmark Frame work has significant flaws.
+
+1. A big part of the benchmark time was spent in the benchmark code itself.
+2. Transaction support was hardcoded and only provided on scenario.
+3. Different benchmark runs used different datasets, which made it hard to compare results across runs.
+
+Major refactors were applied to the benchmark framework to address these issues, including:
+
+### Core runtime and execution model
+
+* Program entry moved from top-level `ycsbc.cc` to `core/ycsbc.cc`
+* The workload/client path was significantly expanded in `core/core_workload.{h,cc}` and `core/client.h`, including transaction-oriented operations (`BEGIN_TXN`, `COMMIT_TXN`, `ROLLBACK_TXN`) and explicit failure operation counters
+* Pre-generated and replayed operation datasets were added via `core/dataset.{h,cc}` and `CoreWorkload::PrepareOpsForFile(...)` so benchmark hot loops can focus on DB calls
+* Core infrastructure additions include `core/db_wrapper.h`, `core/acknowledged_counter_generator.{h,cc}`, `core/random_byte_generator.h`, and updated measurement/status reporting in `core/measurements.{h,cc}`
+
+### Database bindings and adapter layout
+
+* Legacy shared adapter code under `db/` was removed (for example `db/db_factory.*`, `db/redis_db.*`)
+* Binding implementations are now organized under `adapters/` with per-engine directories (`adapters/rocksdb/`, `adapters/leveldb/`, `adapters/lmdb/`, `adapters/wiredtiger/`, `adapters/sqlite/`, `adapters/redis/`, `adapters/leaves/`, plus additional integration directories such as `adapters/aerospike/`, `adapters/badger/`, `adapters/dragonfly/`, and `adapters/null/`)
+* Redis binding was reworked (`adapters/redis/redis_db.{h,cc}`), and the vendored `redis/hiredis/` subtree was removed (38 files)
+* RocksDB support was expanded with a full adapter/options path (`adapters/rocksdb/rocksdb_db.{h,cc}`, `adapters/rocksdb/options.ini`)
+* SQLite and WiredTiger bindings include dedicated adapter and configuration files (`adapters/sqlite/sqlite_db.{h,cc}`, `adapters/wiredtiger/wiredtiger_db.{h,cc}`)
+
+### Workloads and benchmark automation
+
+* A larger application-oriented workload suite was added under `workloads/workload_kv_*` (session, cache, ingest, analytics read, range, concurrent, ACID, batch variants)
+* Legacy workload names were normalized by renaming `workloads/workload[a-f].spec` to `workloads/workload[a-f]`
+* End-to-end benchmark orchestration and analysis scripts were added:
+    * `run_all_benchmarks.sh`
+    * `run_deterministic_benchmark.sh`
+    * `run_leaves_benchmark.sh`
+    * `create_throughput_matrix.py`
+    * `create_benchmark_graphs.py`
+    * `merge_benchmark_csvs.py`
+
+### Docs, utilities, and tests
+
+* `PROPERTIES.md` was added as a consolidated property reference
+* Utility headers were refactored from `core/` into `utils/` (`properties.h`, `timer.h`, `utils.h`) and new helpers were added (`utils/fields.h`, `utils/rate_limit.h`, `utils/countdown_latch.h`, `utils/sha256.{h,cpp}`)
+* Test coverage was extended with `tests/test_fields.cc`
+
+For an exhaustive machine-generated file list for this exact baseline, run:
+
+```bash
+git diff --name-status --find-renames origin/master...HEAD
+```
+
 # Build YCSB-cpp
 
 ## Build with Makefile on POSIX
@@ -61,22 +110,22 @@ See [BUILD_ON_WINDOWS](BUILD_ON_WINDOWS.md).
 
 Load data with leveldb:
 ```
-./ycsb -load -db leveldb -P workloads/workloada -P leveldb/leveldb.properties -s
+./ycsb -load -db leveldb -P workloads/workloada -P adapters/leveldb/leveldb.properties -s
 ```
 
 Run workload A with leveldb:
 ```
-./ycsb -run -db leveldb -P workloads/workloada -P leveldb/leveldb.properties -s
+./ycsb -run -db leveldb -P workloads/workloada -P adapters/leveldb/leveldb.properties -s
 ```
 
 Load and run workload B with rocksdb:
 ```
-./ycsb -load -run -db rocksdb -P workloads/workloadb -P rocksdb/rocksdb.properties -s
+./ycsb -load -run -db rocksdb -P workloads/workloadb -P adapters/rocksdb/rocksdb.properties -s
 ```
 
 Pass additional properties:
 ```
-./ycsb -load -db leveldb -P workloads/workloadb -P rocksdb/rocksdb.properties \
+./ycsb -load -db leveldb -P workloads/workloadb -P adapters/rocksdb/rocksdb.properties \
     -p threadcount=4 -p recordcount=10000000 -p leveldb.cache_size=134217728 -s
 ```
 

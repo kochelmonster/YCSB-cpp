@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "db.h"
+#include "dataset.h"
 #include "measurements.h"
 #include "utils/timer.h"
 #include "utils/utils.h"
@@ -30,28 +31,61 @@ class DBWrapper : public DB {
   void Cleanup() {
     db_->Cleanup();
   }
+  void FlushPending() {
+    db_->FlushPending();
+  }
   Status BeginTransaction() {
-    return db_->BeginTransaction();
+    timer_.Start();
+    Status s = db_->BeginTransaction();
+    uint64_t elapsed = timer_.End();
+    measurements_->Report(BEGIN_TXN, elapsed);
+    return s;
   }
   Status CommitTransaction() {
-    return db_->CommitTransaction();
+    timer_.Start();
+    Status s = db_->CommitTransaction();
+    uint64_t elapsed = timer_.End();
+    measurements_->Report(COMMIT_TXN, elapsed);
+    return s;
   }
   Status RollbackTransaction() {
-    return db_->RollbackTransaction();
-  }
-  Status Read(const std::string &table, const std::string &key,
-              const std::unordered_set<std::string> *fields, Fields &result) {
     timer_.Start();
-    Status s = db_->Read(table, key, fields, result);
+    Status s = db_->RollbackTransaction();
     uint64_t elapsed = timer_.End();
-    if (s == kOK) {
-      measurements_->Report(READ, elapsed);
+    measurements_->Report(ROLLBACK_TXN, elapsed);
+    return s;
+  }
+  Status Load(const std::string &table, Dataset &batch) {
+    // No per-op measurement; the caller measures the full load phase externally.
+    return db_->Load(table, batch);
+  }
+  Status Read(const std::string &table, Slice key,
+              const std::unordered_set<std::string> *fields, Fields &result,
+              bool rmw = false) {
+    timer_.Start();
+    Status s = db_->Read(table, key, fields, result, rmw);
+    uint64_t elapsed = timer_.End();
+    if (s == kSkip) {
+      // Adapter indicated the read was unnecessary (e.g. RMW when
+      // Update will re-read anyway). Do not measure the wasted time.
+      return s;
+    }
+    if (rmw) {
+      if (s == kOK) {
+        measurements_->Report(READMODIFYWRITE, elapsed);
+      } else {
+        measurements_->Report(READMODIFYWRITE_FAILED, elapsed);
+      }
     } else {
-      measurements_->Report(READ_FAILED, elapsed);
+      if (s == kOK) {
+        measurements_->Report(READ, elapsed);
+      } else {
+        measurements_->Report(READ_FAILED, elapsed);
+      }
     }
     return s;
   }
-  Status Scan(const std::string &table, const std::string &key, int record_count,
+  Status Scan(const std::string &table, Slice key, int record_count,
               const std::unordered_set<std::string> *fields, std::vector<Fields> &result) {
     timer_.Start();
     Status s = db_->Scan(table, key, record_count, fields, result);
@@ -63,7 +97,7 @@ class DBWrapper : public DB {
     }
     return s;
   }
-  Status Update(const std::string &table, const std::string &key, Fields &values) {
+  Status Update(const std::string &table, Slice key, const ReadonlyFields &values) {
     timer_.Start();
     Status s = db_->Update(table, key, values);
     uint64_t elapsed = timer_.End();
@@ -74,7 +108,7 @@ class DBWrapper : public DB {
     }
     return s;
   }
-  Status Insert(const std::string &table, const std::string &key, Fields &values) {
+  Status Insert(const std::string &table, Slice key, const ReadonlyFields &values) {
     timer_.Start();
     Status s = db_->Insert(table, key, values);
     uint64_t elapsed = timer_.End();
@@ -85,7 +119,7 @@ class DBWrapper : public DB {
     }
     return s;
   }
-  Status Delete(const std::string &table, const std::string &key) {
+  Status Delete(const std::string &table, Slice key) {
     timer_.Start();
     Status s = db_->Delete(table, key);
     uint64_t elapsed = timer_.End();
