@@ -6,7 +6,7 @@ Charts produced:
   batch_insert_scaling.png         — line chart: throughput vs insert batch size
   batch_update_scaling.png         — line chart: throughput vs update batch size
   value_size_scaling.png           — line chart: throughput vs value size
-  acid_workload_comparison.png     — ACID workloads (A/C/I, Txn, Batch RMW), best across scenarios
+  acid_workload_comparison.png     — ACID workloads (A/C/I, Txn, Batch RMW), aggregated across scenarios
   concurrent_workload_comparison.png — concurrent workloads, grouped bars
 
 All charts are normalized to a reference database (LevelDB if present,
@@ -148,12 +148,7 @@ def aggregate_repeats(frame: pd.DataFrame, method: str = "median") -> pd.DataFra
     """
     group_cols = ["scenario", "batch_size", "workload", "database"]
     grouped = frame.groupby(group_cols, as_index=False)["run_throughput_ops_sec"]
-    if method == "median":
-        aggregated = cast(pd.DataFrame, grouped.median())
-    elif method == "trimmed_mean":
-        aggregated = cast(pd.DataFrame, grouped.agg(trimmed_mean))
-    else:
-        raise ValueError(f"Unsupported repeat aggregation method: {method}")
+    aggregated = aggregate_throughput_grouped(grouped, method)
 
     aggregated["workload_label"] = aggregated["workload"].map(
         WORKLOAD_LABELS).fillna(aggregated["workload"])
@@ -175,6 +170,24 @@ def trimmed_mean(values: pd.Series) -> float:
     if trimmed.empty:
         return float(cleaned.mean())
     return float(trimmed.mean())
+
+
+def aggregate_throughput_grouped(grouped, method: str) -> pd.DataFrame:
+    """Apply a supported aggregation method to a grouped throughput series."""
+    if method == "median":
+        return cast(pd.DataFrame, grouped.median())
+    if method == "trimmed_mean":
+        return cast(pd.DataFrame, grouped.agg(trimmed_mean))
+    raise ValueError(f"Unsupported repeat aggregation method: {method}")
+
+
+def pivot_aggfunc(method: str):
+    """Return a pivot_table-compatible aggregation function for the selected method."""
+    if method == "median":
+        return "median"
+    if method == "trimmed_mean":
+        return trimmed_mean
+    raise ValueError(f"Unsupported repeat aggregation method: {method}")
 
 
 def save_pivot_csv(pivot: pd.DataFrame, output_path: Path) -> None:
@@ -364,6 +377,7 @@ def main() -> None:
         throughput_df_all_raw,
         method=args.repeat_aggregation,
     )
+    selected_aggfunc = pivot_aggfunc(args.repeat_aggregation)
 
     generated_files: list[Path] = []
 
@@ -376,7 +390,7 @@ def main() -> None:
             index="workload_label",
             columns="database",
             values="run_throughput_ops_sec",
-            aggfunc="median",
+            aggfunc=selected_aggfunc,
             fill_value=0,
         )
         ref_db = choose_reference_db(base_run_pivot)
@@ -411,7 +425,7 @@ def main() -> None:
                 index="batch_size",
                 columns="database",
                 values="run_throughput_ops_sec",
-                aggfunc="median",
+                aggfunc=selected_aggfunc,
                 fill_value=0,
             )
             # Sort by batch size ascending
@@ -443,7 +457,7 @@ def main() -> None:
             index="value_size",
             columns="database",
             values="run_throughput_ops_sec",
-            aggfunc="median",
+            aggfunc=selected_aggfunc,
             fill_value=0,
         )
         value_pivot = value_pivot.sort_index()
@@ -464,13 +478,22 @@ def main() -> None:
         generated_files.append(value_chart)
 
     # -----------------------------------------------------------------------
-    # 4. ACID workloads — keep as separate chart (same as before)
+    # 4. ACID workloads — keep as separate chart
     # -----------------------------------------------------------------------
     acid_df = throughput_df_all[throughput_df_all["workload_label"].isin(
         ACID_WORKLOAD_LABELS)]
     if not acid_df.empty:
-        acid_run_pivot = acid_df.groupby(["workload_label", "database"])[
-            "run_throughput_ops_sec"].max().unstack(fill_value=0)
+        acid_grouped = acid_df.groupby(
+            ["workload_label", "database"], as_index=False
+        )["run_throughput_ops_sec"]
+        acid_aggregated = aggregate_throughput_grouped(
+            acid_grouped, args.repeat_aggregation
+        )
+        acid_run_pivot = acid_aggregated.pivot(
+            index="workload_label",
+            columns="database",
+            values="run_throughput_ops_sec",
+        ).fillna(0)
         acid_run_pivot = acid_run_pivot.loc[:, (acid_run_pivot > 0).any()]
         ref_db = choose_reference_db(acid_run_pivot)
         acid_chart = output_dir / "acid_workload_comparison.png"
@@ -478,7 +501,7 @@ def main() -> None:
             normalize_pivot(
                 acid_run_pivot, ref_db) if ref_db else acid_run_pivot,
             acid_chart,
-            "ACID Workload Performance (Best Across All Scenarios)",
+            f"ACID Workload Performance ({args.repeat_aggregation.replace('_', ' ').title()} Across All Scenarios)",
             f"Relative Throughput (× {ref_db})" if ref_db else "Run throughput (ops/sec)",
             sig_figs=3,
             reference_db=ref_db,
@@ -487,13 +510,22 @@ def main() -> None:
         generated_files.append(acid_chart)
 
     # -----------------------------------------------------------------------
-    # 5. Concurrent workloads — keep as separate chart (same as before)
+    # 5. Concurrent workloads — keep as separate chart
     # -----------------------------------------------------------------------
     concurrent_df = throughput_df_all[throughput_df_all["workload_label"].isin(
         CONCURRENT_WORKLOAD_LABELS)]
     if not concurrent_df.empty:
-        concurrent_run_pivot = concurrent_df.groupby(["workload_label", "database"])[
-            "run_throughput_ops_sec"].max().unstack(fill_value=0)
+        concurrent_grouped = concurrent_df.groupby(
+            ["workload_label", "database"], as_index=False
+        )["run_throughput_ops_sec"]
+        concurrent_aggregated = aggregate_throughput_grouped(
+            concurrent_grouped, args.repeat_aggregation
+        )
+        concurrent_run_pivot = concurrent_aggregated.pivot(
+            index="workload_label",
+            columns="database",
+            values="run_throughput_ops_sec",
+        ).fillna(0)
         concurrent_run_pivot = concurrent_run_pivot.loc[:, (concurrent_run_pivot > 0).any(
         )]
         ref_db = choose_reference_db(concurrent_run_pivot)
